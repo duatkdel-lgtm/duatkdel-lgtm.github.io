@@ -497,19 +497,20 @@ function buildJelly(sizeScale = 1, cloneFrom = null) {
   const headGeo = new THREE.SphereGeometry(0.115, 16, 12);
   headGeo.scale(1, 1.08, 0.8);
   part(headGeo, [0.5, 0, 0.8, 0.3], 0.25).position.set(0, 0.98, 0);
-  // 팔다리 — 관절(꼭대기)이 회전축인 캡슐
+  // 팔다리 — 위쪽 캡(관절 볼)의 '중심'이 회전축이라 어떤 자세여도 몸에 붙어 있음
   const limb = (rM, len, rect, sizeM, px2, py2) => {
     const geo = new THREE.CapsuleGeometry(rM, len, 4, 10);
     geo.scale(1, 1, 0.75);
-    geo.translate(0, -(len / 2 + rM), 0);
+    geo.translate(0, -len / 2, 0);   // 관절 볼 중심 = 원점(회전축)
     const m = part(geo, rect, sizeM);
     m.position.set(px2, py2, 0);
     return m;
   };
-  const armL = limb(0.052, 0.27, [0.8, 0, 0.9, 0.42], 0.38, 0.185, 0.80);
-  const armR = limb(0.052, 0.27, [0.9, 0, 1, 0.42], 0.38, -0.185, 0.80);
-  const legL = limb(0.062, 0.30, [0.5, 0.32, 0.64, 0.8], 0.43, 0.085, 0.43);
-  const legR = limb(0.062, 0.30, [0.64, 0.32, 0.78, 0.8], 0.43, -0.085, 0.43);
+  // 어깨/골반을 몸통 표면 안쪽에 심어서 관절 볼이 항상 몸에 파묻힘
+  const armL = limb(0.055, 0.27, [0.8, 0, 0.9, 0.42], 0.38, 0.15, 0.77);
+  const armR = limb(0.055, 0.27, [0.9, 0, 1, 0.42], 0.38, -0.15, 0.77);
+  const legL = limb(0.066, 0.34, [0.5, 0.32, 0.64, 0.8], 0.47, 0.075, 0.42);
+  const legR = limb(0.066, 0.34, [0.64, 0.32, 0.78, 0.8], 0.47, -0.075, 0.42);
 
   g.scale.setScalar(sizeScale);
   decorGroup.add(g);
