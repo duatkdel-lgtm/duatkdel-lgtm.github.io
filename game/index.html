@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>카멜레온 숨바꼭질 3D</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#0b1020; touch-action:none; overscroll-behavior:none;
+    font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; color:#fff; }
+  #c { position:fixed; inset:0; width:100%; height:100%; display:block; }
+
+  .overlay { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    text-align:center; z-index:50; padding:24px; }
+  .hidden { display:none !important; }
+
+  /* ---------- 공통 버튼 ---------- */
+  .btn { display:inline-block; border:none; border-radius:18px; padding:16px 34px; font-size:22px; font-weight:800;
+    color:#fff; background:linear-gradient(135deg,#34d399,#059669); box-shadow:0 6px 0 #04684a, 0 10px 24px rgba(0,0,0,.35);
+    cursor:pointer; transition:transform .08s; letter-spacing:.5px; }
+  .btn:active { transform:translateY(4px); box-shadow:0 2px 0 #04684a; }
+  .btn.blue { background:linear-gradient(135deg,#60a5fa,#2563eb); box-shadow:0 6px 0 #1e3a8a, 0 10px 24px rgba(0,0,0,.35); }
+  .btn.blue:active { box-shadow:0 2px 0 #1e3a8a; }
+  .btn.red { background:linear-gradient(135deg,#f87171,#dc2626); box-shadow:0 6px 0 #7f1d1d, 0 10px 24px rgba(0,0,0,.35); }
+  .btn.red:active { box-shadow:0 2px 0 #7f1d1d; }
+  .btn.small { padding:10px 20px; font-size:17px; border-radius:14px; }
+  .btn:disabled { filter:grayscale(.8) brightness(.6); }
+
+  /* ---------- 게이트 / 회전 안내 ---------- */
+  #gate, #rotate { background:#0b1020; z-index:200; }
+  #gate h1, #rotate h1 { font-size:34px; margin-bottom:14px; }
+  #gate p, #rotate p { font-size:19px; line-height:1.7; color:#a5b4fc; }
+  #rotate { display:none; }
+  @media (orientation: portrait) { #rotate.armed { display:flex; } }
+
+  /* ---------- 메인 메뉴 ---------- */
+  #menu { background:radial-gradient(1200px 700px at 50% 20%, #14532d 0%, #0b1020 65%); z-index:60; }
+  #menu .logo { font-size:56px; font-weight:900; text-shadow:0 4px 0 rgba(0,0,0,.4);
+    background:linear-gradient(90deg,#4ade80,#fde047,#fb923c,#f472b6); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  #menu .sub { font-size:20px; color:#bbf7d0; margin:8px 0 26px; }
+  .settings { display:flex; gap:28px; margin-bottom:30px; flex-wrap:wrap; justify-content:center; }
+  .setting { background:rgba(255,255,255,.07); border-radius:16px; padding:14px 18px; }
+  .setting .label { font-size:15px; color:#93c5fd; margin-bottom:10px; font-weight:700; }
+  .seg { display:flex; gap:6px; }
+  .seg button { border:none; border-radius:10px; padding:9px 16px; font-size:16px; font-weight:700; color:#cbd5e1;
+    background:rgba(255,255,255,.09); cursor:pointer; }
+  .seg button.on { background:#22c55e; color:#052e16; }
+  #howto { margin-top:22px; max-width:640px; font-size:15.5px; line-height:1.75; color:#cbd5e1;
+    background:rgba(0,0,0,.35); border-radius:16px; padding:16px 22px; }
+
+  /* ---------- 핸드오프 ---------- */
+  #handoff { background:#05070f; z-index:70; }
+  #handoff .who { font-size:44px; font-weight:900; margin:10px 0 6px; }
+  #handoff .desc { font-size:19px; color:#94a3b8; margin-bottom:30px; line-height:1.7; }
+  #handoff .emoji { font-size:70px; }
+
+  /* ---------- 라운드 결과 / 최종 ---------- */
+  #result, #gameover { background:rgba(4,6,14,.88); z-index:70; }
+  #result .big, #gameover .big { font-size:46px; font-weight:900; margin-bottom:10px; }
+  #result .desc, #gameover .desc { font-size:20px; color:#cbd5e1; margin-bottom:24px; line-height:1.6; }
+  .scoreboard { display:flex; gap:22px; margin-bottom:26px; }
+  .scorecard { background:rgba(255,255,255,.08); border-radius:18px; padding:16px 30px; text-align:center; min-width:130px; }
+  .scorecard .t { font-size:16px; font-weight:800; }
+  .scorecard .s { font-size:42px; font-weight:900; }
+  .scorecard.a .t { color:#f87171; } .scorecard.b .t { color:#60a5fa; }
+
+  /* ---------- HUD ---------- */
+  #hud { position:fixed; inset:0; z-index:30; pointer-events:none; }
+  #hud .top { position:absolute; top:calc(10px + env(safe-area-inset-top)); left:0; right:0; display:flex;
+    justify-content:center; align-items:center; gap:14px; }
+  .pill { background:rgba(5,8,18,.72); border-radius:999px; padding:8px 18px; font-size:17px; font-weight:800;
+    backdrop-filter:blur(6px); pointer-events:none; }
+  #timer { font-variant-numeric:tabular-nums; font-size:22px; color:#fde047; min-width:96px; text-align:center; }
+  #phaseLabel { color:#86efac; }
+  #guessPill { color:#fca5a5; }
+
+  #hud .actions { position:absolute; right:calc(12px + env(safe-area-inset-right)); top:50%; transform:translateY(-50%);
+    display:flex; flex-direction:column; gap:12px; pointer-events:auto; }
+  .act { width:76px; height:76px; border:none; border-radius:20px; font-size:13px; font-weight:800; color:#fff;
+    background:rgba(15,23,42,.82); box-shadow:0 4px 12px rgba(0,0,0,.4), inset 0 0 0 2px rgba(255,255,255,.14);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; cursor:pointer; backdrop-filter:blur(6px); }
+  .act .ico { font-size:26px; }
+  .act.on { background:#16a34a; box-shadow:0 4px 12px rgba(0,0,0,.4), inset 0 0 0 3px #bbf7d0; }
+  .act:disabled { opacity:.35; }
+
+  #readyBtn { position:absolute; left:50%; transform:translateX(-50%); bottom:calc(18px + env(safe-area-inset-bottom));
+    pointer-events:auto; }
+
+  /* ---------- 페인트 툴바 ---------- */
+  #paintbar { position:absolute; left:50%; transform:translateX(-50%); bottom:calc(14px + env(safe-area-inset-bottom));
+    display:flex; align-items:center; gap:10px; background:rgba(8,12,24,.85); border-radius:22px; padding:10px 14px;
+    pointer-events:auto; backdrop-filter:blur(8px); max-width:92vw; }
+  .swatches { display:flex; gap:7px; flex-wrap:wrap; max-width:420px; }
+  .sw { width:34px; height:34px; border-radius:50%; border:2.5px solid rgba(255,255,255,.25); cursor:pointer; }
+  .sw.on { border-color:#fff; transform:scale(1.15); box-shadow:0 0 10px rgba(255,255,255,.6); }
+  .tool { width:48px; height:48px; border:none; border-radius:14px; font-size:22px; background:rgba(255,255,255,.1); color:#fff; cursor:pointer; }
+  .tool.on { background:#2563eb; box-shadow:inset 0 0 0 2.5px #bfdbfe; }
+  .sizes { display:flex; flex-direction:column; gap:5px; }
+  .sizeBtn { width:44px; border:none; border-radius:10px; background:rgba(255,255,255,.1); color:#fff; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; height:22px; }
+  .sizeBtn.on { background:#16a34a; }
+  .dot { border-radius:50%; background:#fff; }
+  #curColor { width:44px; height:44px; border-radius:12px; border:2.5px solid #fff; }
+
+  /* ---------- 조이스틱 ---------- */
+  #stickBase { position:absolute; width:130px; height:130px; border-radius:50%; background:rgba(255,255,255,.09);
+    border:2px solid rgba(255,255,255,.22); display:none; pointer-events:none; }
+  #stickKnob { position:absolute; width:56px; height:56px; border-radius:50%; background:rgba(255,255,255,.45); display:none; pointer-events:none; }
+
+  /* ---------- 조준점 ---------- */
+  #crosshair { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:14px; height:14px;
+    border:2.5px solid rgba(255,255,255,.85); border-radius:50%; box-shadow:0 0 6px rgba(0,0,0,.6); display:none; }
+
+  /* ---------- 확인 팝업 ---------- */
+  #confirm { position:fixed; z-index:80; background:rgba(10,14,28,.95); border-radius:18px; padding:16px 18px;
+    box-shadow:0 10px 30px rgba(0,0,0,.5); display:none; flex-direction:column; gap:12px; align-items:center;
+    border:1.5px solid rgba(255,255,255,.15); }
+  #confirm .q { font-size:18px; font-weight:800; }
+  #confirm .row { display:flex; gap:10px; }
+
+  /* ---------- 토스트 ---------- */
+  #toast { position:fixed; left:50%; top:22%; transform:translateX(-50%); z-index:65; background:rgba(8,12,24,.9);
+    border-radius:16px; padding:14px 26px; font-size:22px; font-weight:900; opacity:0; transition:opacity .25s; pointer-events:none;
+    border:1.5px solid rgba(255,255,255,.18); }
+
+  #hint { position:fixed; left:50%; bottom:calc(96px + env(safe-area-inset-bottom)); transform:translateX(-50%); z-index:31;
+    font-size:15px; color:rgba(255,255,255,.75); background:rgba(5,8,18,.55); padding:7px 16px; border-radius:999px;
+    pointer-events:none; transition:opacity .4s; white-space:nowrap; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<!-- 기기 게이트 -->
+<div id="gate" class="overlay hidden">
+  <h1>🦎 카멜레온 숨바꼭질 3D</h1>
+  <p>이 게임은 <b>iPad 전용</b>입니다.<br>iPad의 Safari에서 접속해 주세요.<br><br>
+  <span style="font-size:15px;color:#64748b">가로 모드 + 전체 화면(홈 화면에 추가)을 추천합니다.</span></p>
+</div>
+
+<!-- 회전 안내 -->
+<div id="rotate" class="overlay">
+  <h1>🔄</h1>
+  <p><b>iPad를 가로로 돌려주세요</b><br>이 게임은 가로 모드 전용입니다.</p>
+</div>
+
+<!-- 메인 메뉴 -->
+<div id="menu" class="overlay">
+  <div class="logo">🦎 카멜레온 숨바꼭질</div>
+  <div class="sub">그림을 그려 배경에 숨어라! — iPad 하나로 즐기는 2인 대전</div>
+  <div class="settings">
+    <div class="setting"><div class="label">라운드 수</div>
+      <div class="seg" id="segRounds">
+        <button data-v="2">2</button><button data-v="4" class="on">4</button><button data-v="6">6</button>
+      </div></div>
+    <div class="setting"><div class="label">위장 난이도 (높을수록 찾기 어려움)</div>
+      <div class="seg" id="segDiff">
+        <button data-v="easy">연하게</button><button data-v="normal" class="on">보통</button><button data-v="hard">진하게</button>
+      </div></div>
+  </div>
+  <button class="btn" id="startBtn">게임 시작 ▶</button>
+  <div id="howto">
+    <b>🎮 방법</b> — <b style="color:#60a5fa">B팀(숨기)</b>: 맵을 돌아다니며 벽·바닥에 자유롭게 그림을 그리고, 카멜레온을 원하는 곳에 위장시켜 숨겨요. 가짜 카멜레온 3마리로 술래를 속일 수도!
+    <b style="color:#f87171">A팀(술래)</b>: iPad를 넘겨받아 진짜 카멜레온을 찾아 탭! 진짜는 아주 가끔 <b>눈을 깜빡</b>여요…👀
+    라운드마다 역할이 바뀝니다.
+  </div>
+</div>
+
+<!-- 핸드오프 -->
+<div id="handoff" class="overlay hidden">
+  <div class="emoji" id="hoEmoji">📱</div>
+  <div class="who" id="hoWho">B팀 차례</div>
+  <div class="desc" id="hoDesc">iPad를 B팀에게 전달하세요</div>
+  <button class="btn blue" id="hoBtn">준비 완료, 시작!</button>
+</div>
+
+<!-- 라운드 결과 -->
+<div id="result" class="overlay hidden">
+  <div class="big" id="resBig">찾았다! 🎯</div>
+  <div class="desc" id="resDesc"></div>
+  <div class="scoreboard">
+    <div class="scorecard a"><div class="t">🔴 A팀</div><div class="s" id="resScoreA">0</div></div>
+    <div class="scorecard b"><div class="t">🔵 B팀</div><div class="s" id="resScoreB">0</div></div>
+  </div>
+  <button class="btn" id="resBtn">다음 라운드 ▶</button>
+</div>
+
+<!-- 최종 결과 -->
+<div id="gameover" class="overlay hidden">
+  <div class="big" id="goBig">🏆 A팀 승리!</div>
+  <div class="desc" id="goDesc"></div>
+  <div class="scoreboard">
+    <div class="scorecard a"><div class="t">🔴 A팀</div><div class="s" id="goScoreA">0</div></div>
+    <div class="scorecard b"><div class="t">🔵 B팀</div><div class="s" id="goScoreB">0</div></div>
+  </div>
+  <button class="btn" id="goBtn">처음으로</button>
+</div>
+
+<!-- HUD -->
+<div id="hud" class="hidden">
+  <div class="top">
+    <div class="pill" id="phaseLabel">숨는 중</div>
+    <div class="pill" id="timer">2:30</div>
+    <div class="pill hidden" id="guessPill">🔍 10</div>
+  </div>
+  <div class="actions" id="hideActions">
+    <button class="act" id="paintModeBtn"><span class="ico">🎨</span>그리기</button>
+    <button class="act" id="hideBtn"><span class="ico">🦎</span>숨기</button>
+    <button class="act" id="decoyBtn"><span class="ico">🃏</span>가짜 <span id="decoyCount">3</span></button>
+  </div>
+  <button class="btn small hidden" id="readyBtn" disabled>✅ 다 숨었어요!</button>
+
+  <div id="paintbar" class="hidden">
+    <div id="curColor"></div>
+    <div class="swatches" id="swatches"></div>
+    <div class="sizes">
+      <button class="sizeBtn" data-s="0"><span class="dot" style="width:6px;height:6px"></span></button>
+      <button class="sizeBtn on" data-s="1"><span class="dot" style="width:11px;height:11px"></span></button>
+      <button class="sizeBtn" data-s="2"><span class="dot" style="width:17px;height:17px"></span></button>
+    </div>
+    <button class="tool" id="brushTool" title="붓">🖌️</button>
+    <button class="tool" id="dropTool" title="스포이드">💉</button>
+    <button class="tool" id="eraseTool" title="지우개">🧽</button>
+  </div>
+
+  <div id="stickBase"></div>
+  <div id="stickKnob"></div>
+  <div id="crosshair"></div>
+</div>
+
+<div id="confirm">
+  <div class="q" id="confirmQ">여기에 숨을까요?</div>
+  <div class="row">
+    <button class="btn small" id="confirmYes">확인</button>
+    <button class="btn small red" id="confirmNo">취소</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+<div id="hint" class="hidden"></div>
+
+<script type="importmap">{ "imports": { "three": "./lib/three.module.js" } }</script>
+<script type="module" src="./main.js"></script>
+</body>
+</html>
