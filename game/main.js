@@ -511,12 +511,14 @@ function buildJelly(sizeScale = 1, cloneFrom = null) {
   const armR = limb(0.055, 0.27, [0.9, 0, 1, 0.42], 0.38, -0.15, 0.77);
   const legL = limb(0.066, 0.34, [0.5, 0.32, 0.64, 0.8], 0.47, 0.075, 0.42);
   const legR = limb(0.066, 0.34, [0.64, 0.32, 0.78, 0.8], 0.47, -0.075, 0.42);
+  armL.userData.limb = 'armL'; armR.userData.limb = 'armR';
+  legL.userData.limb = 'legL'; legR.userData.limb = 'legR';
 
   g.scale.setScalar(sizeScale);
   decorGroup.add(g);
   const j = {
     group: g, surface: surf, armL, armR, legL, legR,
-    baseScale: sizeScale, pose: 0, qBasis: null,
+    baseScale: sizeScale, pose: 0, qBasis: null, customRoll: 0,
     worldPos: new THREE.Vector3(), normal: new THREE.Vector3(0, 1, 0),
   };
   applyPose(j, 0);
@@ -526,13 +528,14 @@ function buildJelly(sizeScale = 1, cloneFrom = null) {
 function applyPose(j, idx) {
   const p = POSES[idx];
   j.pose = idx;
+  j.customRoll = p.roll;
   j.armL.rotation.z = p.armL; j.armR.rotation.z = p.armR;
   j.legL.rotation.z = p.legL; j.legR.rotation.z = p.legR;
   if (j.qBasis) applyAttachOrientation(j);   // 이미 붙어있으면 roll 즉시 반영
 }
 
 function applyAttachOrientation(j) {
-  const roll = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), POSES[j.pose].roll);
+  const roll = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), j.customRoll);
   j.group.quaternion.copy(j.qBasis.clone().multiply(roll));
   // 몸 중심(로컬 y≈0.55)이 탭한 지점에 오도록 배치
   const yAxis = new THREE.Vector3(0, 1, 0).applyQuaternion(j.group.quaternion);
@@ -734,6 +737,28 @@ function raycastScreen(clientX, clientY, skipEyes = false) {
   }
   return null;
 }
+function toScreen(v3) {
+  const p = v3.clone().project(camera);
+  return { x: (p.x + 1) / 2 * window.innerWidth, y: (1 - p.y) / 2 * window.innerHeight };
+}
+// 손가락 위치 → 팔다리 회전각(몸 평면 기준). 몸이 어떤 방향으로 붙어있든 정확함
+function limbAngleFromScreen(j, limbKey, fx, fy) {
+  const limb = j[limbKey];
+  const joint = limb.getWorldPosition(new THREE.Vector3());
+  const q = j.group.quaternion;
+  const js = toScreen(joint);
+  const px = toScreen(joint.clone().addScaledVector(new THREE.Vector3(1, 0, 0).applyQuaternion(q), 0.3));
+  const py = toScreen(joint.clone().addScaledVector(new THREE.Vector3(0, 1, 0).applyQuaternion(q), 0.3));
+  const A = px.x - js.x, C = px.y - js.y;   // 화면에 투영된 몸 X축
+  const B = py.x - js.x, D = py.y - js.y;   // 화면에 투영된 몸 Y축
+  const det = A * D - B * C;
+  if (Math.abs(det) < 1e-3) return null;
+  const dx = fx - js.x, dy = fy - js.y;
+  const u = (D * dx - B * dy) / det;
+  const v = (-C * dx + A * dy) / det;
+  return Math.atan2(u, -v);
+}
+
 // 줌 (핀치/휠) — FOV 조절
 function setZoom(fov) {
   camera.fov = clamp(fov, 20, 80);
@@ -814,12 +839,14 @@ function placeChameleonAt(hit, isReal) {
     game.chamPlaced = true;
     game.hidden = game.cham;
     $('readyBtn').disabled = false;
-    toast('🕴️ 붙었다! 몸을 색칠하고 🧍 자세도 바꿔보세요', 2200);
+    toast('🕴️ 붙었다! ✋ 팔다리를 잡고 드래그하면 자세 자유 변형!', 2400);
   } else {
-    // 가짜: 지금까지 칠한 내 모습 + 현재 자세를 그대로 복제
+    // 가짜: 지금까지 칠한 내 모습 + 현재 자세(커스텀 포함)를 그대로 복제
     const decoy = buildJelly(DIFF[game.difficulty].sizeScale, game.cham.surface);
     decoy.group.traverse((o) => { o.userData.chamRole = 'decoy'; });
     applyPose(decoy, game.cham.pose);
+    ['armL', 'armR', 'legL', 'legR'].forEach((k) => { decoy[k].rotation.z = game.cham[k].rotation.z; });
+    decoy.customRoll = game.cham.customRoll;
     attachJelly(decoy, hit);
     game.decoys.push(decoy);
     game.decoysLeft--;
@@ -909,6 +936,21 @@ canvas.addEventListener('pointerdown', (e) => {
       stickPtr = e.pointerId;
       p.ox = e.clientX; p.oy = e.clientY; p.vx = 0; p.vy = 0;
       stickShow(e.clientX, e.clientY);
+    } else if (st === 'hide' && game.cham && !game.placing) {
+      // 내 젤리맨을 직접 잡으면: 팔다리 = 관절 드래그, 몸통 = 벽 위 회전
+      const hit = raycastScreen(e.clientX, e.clientY);
+      if (hit && hit.object.userData.chamRole === 'real') {
+        const lk = hit.object.userData.limb;
+        if (lk) {
+          p.kind = 'poseLimb'; p.limb = lk;
+        } else if (game.cham.qBasis) {
+          p.kind = 'poseRoll';
+          const c = toScreen(game.cham.group.getWorldPosition(new THREE.Vector3()));
+          p.cx = c.x; p.cy = c.y;
+          p.a0 = Math.atan2(e.clientY - c.y, e.clientX - c.x);
+          p.roll0 = game.cham.customRoll;
+        }
+      }
     }
   }
   pointers.set(e.pointerId, p);
@@ -946,6 +988,13 @@ canvas.addEventListener('pointermove', (e) => {
     const hit = raycastScreen(e.clientX, e.clientY, true);
     if (hit && hit.object.userData.surface) p.last = paintAt(hit, p.last, e.pressure, p.type === 'pen');
     else p.last = null;
+  } else if (p.kind === 'poseLimb' && game.cham) {
+    const th = limbAngleFromScreen(game.cham, p.limb, e.clientX, e.clientY);
+    if (th !== null) game.cham[p.limb].rotation.z = th;
+  } else if (p.kind === 'poseRoll' && game.cham) {
+    const a = Math.atan2(e.clientY - p.cy, e.clientX - p.cx);
+    game.cham.customRoll = p.roll0 - (a - p.a0);
+    applyAttachOrientation(game.cham);
   }
 });
 
@@ -957,7 +1006,7 @@ function pointerEnd(e) {
   if (p.kind === 'stick' || e.pointerId === stickPtr) { stickPtr = null; stickHide(); }
 
   // 탭 판정
-  const isTap = p.moved < 14 && performance.now() - p.t0 < 420 && p.kind !== 'stick' && p.kind !== 'paint';
+  const isTap = p.moved < 14 && performance.now() - p.t0 < 420 && p.kind === 'look';
   if (!isTap || game.confirmOpen) return;
 
   if (game.state === 'hide' && game.placing) {
