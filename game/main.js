@@ -12,19 +12,13 @@ const rand = (a, b) => a + Math.random() * (b - a);
 const randi = (a, b) => Math.floor(rand(a, b + 1));
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
-// ---------------- 기기 게이트 (iPad 전용) ----------------
-const ua = navigator.userAgent;
-const isIPad = /iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
-const devBypass = new URLSearchParams(location.search).has('dev');
-if (!isIPad && !devBypass) {
-  $('gate').classList.remove('hidden');
-  $('menu').classList.add('hidden');
-  throw new Error('iPad only');
-}
-$('rotate').classList.add('armed');
+// ---------------- 기기 감지 (iPad + PC 모두 지원) ----------------
+const isTouchDevice = navigator.maxTouchPoints > 0;
+if (isTouchDevice) $('rotate').classList.add('armed');   // 세로 경고는 터치 기기에서만
 document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 document.addEventListener('dblclick', (e) => e.preventDefault());
+document.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ---------------- 사운드 ----------------
 let AC = null;
@@ -123,6 +117,23 @@ class PaintSurface {
     };
     this.meshes.push(mesh);
     decorGroup.add(mesh);
+    paintMeshes.push(mesh);
+    solidMeshes.push(mesh);
+    return mesh;
+  }
+  // 아틀라스의 uv 영역을 쓰는 임의 지오메트리 파트(카멜레온 몸 등)
+  addPart(geo, u0, v0, u1, v1, sizeM, group) {
+    const uv = geo.attributes.uv;
+    for (let i = 0; i < uv.count; i++) {
+      uv.setXY(i, u0 + uv.getX(i) * (u1 - u0), v0 + uv.getY(i) * (v1 - v0));
+    }
+    const mesh = new THREE.Mesh(geo, this.material);
+    mesh.userData = {
+      surface: this,
+      ppmX: this.canvas.width * (u1 - u0) / sizeM,
+      ppmY: this.canvas.height * (v1 - v0) / sizeM,
+    };
+    group.add(mesh);
     paintMeshes.push(mesh);
     solidMeshes.push(mesh);
     return mesh;
@@ -436,90 +447,76 @@ function buildMap() {
   );
 }
 
-// ---------------- 카멜레온 스탬프 ----------------
-// 100x100 좌표계 실루엣 → 마스크 캔버스
-function chameleonMask(sizePx, color) {
-  const pad = 1.3;
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = Math.ceil(sizePx * pad);
-  const ctx = cv.getContext('2d');
-  ctx.translate(cv.width / 2, cv.height / 2);
-  ctx.scale(sizePx / 108, sizePx / 108);
-  ctx.fillStyle = '#000'; ctx.strokeStyle = '#000';
-  ctx.lineCap = 'round';
-  // 몸통+머리
-  ctx.beginPath();
-  ctx.moveTo(-50, 4);
-  ctx.quadraticCurveTo(-49, -8, -38, -13);
-  ctx.quadraticCurveTo(-33, -24, -24, -21);       // 볏(casque)
-  ctx.quadraticCurveTo(-6, -30, 12, -23);         // 등
-  ctx.quadraticCurveTo(27, -16, 32, -6);
-  ctx.quadraticCurveTo(34, 4, 26, 9);
-  ctx.quadraticCurveTo(8, 16, -14, 13);           // 배
-  ctx.quadraticCurveTo(-36, 12, -44, 9);
-  ctx.closePath(); ctx.fill();
-  // 다리
-  ctx.lineWidth = 8;
-  ctx.beginPath(); ctx.moveTo(-22, 8); ctx.lineTo(-19, 26); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(12, 8); ctx.lineTo(17, 26); ctx.stroke();
-  // 말린 꼬리
-  ctx.lineWidth = 9;
-  ctx.beginPath(); ctx.arc(38, 6, 12, Math.PI * 0.95, Math.PI * 2.25); ctx.stroke();
-  ctx.lineWidth = 6;
-  ctx.beginPath(); ctx.arc(38, 6, 4.5, 0, Math.PI * 1.4); ctx.stroke();
-  // 색 입히기
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.globalCompositeOperation = 'source-in';
-  ctx.fillStyle = color; ctx.fillRect(0, 0, cv.width, cv.height);
-  return cv;
+// ---------------- 3D 카멜레온 캐릭터 ----------------
+// 새하얀 몸의 카멜레온 모델 — 몸 전체가 페인트 가능한 캔버스(메차카멜레온 방식)
+// cloneFrom을 주면 그 시점의 페인트 상태를 복사(가짜 카멜레온용)
+function buildChameleon(sizeScale = 1, cloneFrom = null) {
+  const surf = new PaintSurface(512, 512);
+  {
+    const ctx = surf.ctx;
+    ctx.fillStyle = '#f4f4ee'; ctx.fillRect(0, 0, 512, 512);
+    speckle(ctx, 0, 0, 512, 512, ['#e9eae2', '#fbfbf7'], 500, 2, 5, 0.5);
+    if (cloneFrom) ctx.drawImage(cloneFrom.canvas, 0, 0);
+  }
+  surf.snapshotBase();
+  surf.texture.needsUpdate = true;
+
+  const g = new THREE.Group();
+  const part = (geo, r, sizeM) => surf.addPart(geo, r[0], r[1], r[2], r[3], sizeM, g);
+
+  // 몸통(타원체) — 앞쪽 = +Z
+  const bodyGeo = new THREE.SphereGeometry(1, 24, 16);
+  bodyGeo.scale(0.20, 0.16, 0.34);
+  part(bodyGeo, [0, 0, 0.5, 0.5], 0.7).position.set(0, 0.02, 0);
+  // 머리
+  part(new THREE.SphereGeometry(0.115, 16, 12), [0.5, 0, 0.78, 0.28], 0.24)
+    .position.set(0, 0.075, 0.32);
+  // 볏(casque)
+  const casque = part(new THREE.ConeGeometry(0.075, 0.15, 10), [0.78, 0, 1, 0.22], 0.15);
+  casque.position.set(0, 0.185, 0.26); casque.rotation.x = -0.5;
+  // 주둥이
+  const snout = part(new THREE.ConeGeometry(0.055, 0.11, 10), [0.5, 0.3, 0.64, 0.44], 0.11);
+  snout.position.set(0, 0.05, 0.43); snout.rotation.x = Math.PI / 2;
+  // 말린 꼬리(토러스 호)
+  const tail = part(new THREE.TorusGeometry(0.10, 0.032, 8, 22, Math.PI * 1.75), [0, 0.52, 0.46, 0.96], 0.45);
+  tail.position.set(0, 0.06, -0.38); tail.rotation.y = Math.PI / 2; tail.rotation.z = 0.5;
+  // 다리 4개
+  [[-0.13, 0.16], [0.13, 0.16], [-0.13, -0.14], [0.13, -0.14]].forEach(([lx, lz], i) => {
+    const leg = part(new THREE.CylinderGeometry(0.026, 0.034, 0.17, 8),
+      [0.5 + (i % 2) * 0.13, 0.5 + Math.floor(i / 2) * 0.15, 0.61 + (i % 2) * 0.13, 0.63 + Math.floor(i / 2) * 0.15], 0.17);
+    leg.position.set(lx, -0.10, lz);
+  });
+  // 돌출형 눈(포탑 눈) — 페인트 불가, 진짜만 깜빡임
+  const eyes = [];
+  [-1, 1].forEach((s) => {
+    const eye = new THREE.Mesh(
+      new THREE.SphereGeometry(0.048, 12, 10),
+      new THREE.MeshLambertMaterial({ color: 0xfffbe8 }));
+    eye.position.set(s * 0.095, 0.105, 0.345);
+    const pupil = new THREE.Mesh(
+      new THREE.SphereGeometry(0.018, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0x1c1c1c }));
+    pupil.position.set(s * 0.032, 0.01, 0.028);
+    eye.add(pupil);
+    g.add(eye);
+    solidMeshes.push(eye);
+    eyes.push(eye);
+  });
+
+  g.scale.setScalar(sizeScale);
+  decorGroup.add(g);
+  return { group: g, surface: surf, eyes, worldPos: new THREE.Vector3(), normal: new THREE.Vector3(0, 1, 0) };
 }
 
-function sampleColorAround(surface, x, y, r) {
-  try {
-    const d = surface.ctx.getImageData(clamp(x - r, 0, surface.canvas.width - 1), clamp(y - r, 0, surface.canvas.height - 1), 2 * r, 2 * r).data;
-    let rr = 0, gg = 0, bb = 0, n = 0;
-    for (let i = 0; i < d.length; i += 16) { rr += d[i]; gg += d[i + 1]; bb += d[i + 2]; n++; }
-    return `rgb(${Math.round(rr / n)},${Math.round(gg / n)},${Math.round(bb / n)})`;
-  } catch (e) { return 'rgb(128,128,128)'; }
-}
-
-// 스탬프: 표면 텍스처 위에 반투명 실루엣을 눌러 찍음
-function stampChameleon(surface, px, py, sizePx, opts) {
-  const ctx = surface.ctx;
-  const flip = Math.random() < 0.5 ? -1 : 1;
-  const rot = rand(-0.35, 0.35);
-  const draw = (mask, alpha, dx = 0, dy = 0) => {
-    ctx.save();
-    ctx.translate(px + dx, py + dy); ctx.rotate(rot); ctx.scale(flip, 1);
-    ctx.globalAlpha = alpha;
-    ctx.drawImage(mask, -mask.width / 2, -mask.height / 2);
-    ctx.restore();
-  };
-  const darkMask = chameleonMask(sizePx, '#08130a');
-  const liteMask = chameleonMask(sizePx, '#ffffff');
-  draw(liteMask, opts.bodyAlpha * 0.55, 1.5, 1.5);   // 아래쪽 밝은 테두리 느낌
-  draw(darkMask, opts.bodyAlpha);                     // 본체 어두운 톤
-  // 눈 (머리 쪽): 로컬(-34,-14)
-  const la = { x: -34 * flip, y: -14 };
-  const cos = Math.cos(rot), sin = Math.sin(rot);
-  const ex = px + (la.x * cos - la.y * sin) * (sizePx / 108);
-  const ey = py + (la.x * sin + la.y * cos) * (sizePx / 108);
-  const er = Math.max(2.5, sizePx * 0.05);
-  const lidColor = sampleColorAround(surface, ex, ey, Math.ceil(er * 2));
-  ctx.save();
-  ctx.globalAlpha = clamp(opts.bodyAlpha * 2.4, 0.25, 0.75);
-  ctx.fillStyle = '#fff';
-  ctx.beginPath(); ctx.arc(ex, ey, er, 0, 7); ctx.fill();
-  ctx.globalAlpha = clamp(opts.bodyAlpha * 3.2, 0.35, 0.9);
-  ctx.fillStyle = '#111';
-  ctx.beginPath(); ctx.arc(ex, ey, er * 0.45, 0, 7); ctx.fill();
-  ctx.restore();
-  surface.dirty = true;
-  // 눈 영역 저장(깜빡임용)
-  const eb = Math.ceil(er * 2.6);
-  let openData = null;
-  try { openData = ctx.getImageData(ex - eb, ey - eb, eb * 2, eb * 2); } catch (e) {}
-  return { ex, ey, er, eb, lidColor, openData };
+// 표면에 카멜레온을 붙임(배가 표면을 향하도록 정렬 + 무작위 회전)
+function attachChameleon(cham, hit) {
+  const n = worldNormalOf(hit);
+  const align = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), n);
+  const twist = new THREE.Quaternion().setFromAxisAngle(n, rand(0, Math.PI * 2));
+  cham.group.quaternion.copy(twist.multiply(align));
+  cham.group.position.copy(hit.point).addScaledVector(n, 0.155 * cham.group.scale.x);
+  cham.worldPos.copy(hit.point);
+  cham.normal.copy(n);
 }
 
 // ---------------- 플레이어 ----------------
@@ -559,9 +556,9 @@ function collide() {
 
 // ---------------- 게임 상태 ----------------
 const DIFF = {
-  easy: { bodyAlpha: 0.20, blinkMin: 3.5, blinkMax: 6, guesses: 12 },
-  normal: { bodyAlpha: 0.12, blinkMin: 5, blinkMax: 8.5, guesses: 9 },
-  hard: { bodyAlpha: 0.075, blinkMin: 7, blinkMax: 11, guesses: 7 },
+  easy: { sizeScale: 1.25, blinkMin: 3.5, blinkMax: 6, guesses: 12 },
+  normal: { sizeScale: 1.0, blinkMin: 5, blinkMax: 8.5, guesses: 9 },
+  hard: { sizeScale: 0.8, blinkMin: 7, blinkMax: 11, guesses: 7 },
 };
 const HIDE_TIME = 150, SEEK_TIME = 180;
 const game = {
@@ -570,7 +567,9 @@ const game = {
   scoreA: 0, scoreB: 0,
   hiderTeam: 'B',          // 이번 라운드에 숨는 팀
   timer: 0, guesses: 0,
-  hidden: null,            // {surface, mesh, px, py, worldPos, normal, snapshot, eye}
+  hidden: null,            // 배치 완료된 진짜 카멜레온 {group, surface, eyes, worldPos, normal}
+  cham: null,              // 이번 라운드의 내 카멜레온(3D 모델)
+  chamPlaced: false,
   decoys: [], decoysLeft: 3,
   placing: null,           // null | 'real' | 'decoy'
   paintMode: false,
@@ -580,8 +579,7 @@ const game = {
   lastTickSec: -1,
 };
 const BRUSH_M = [0.06, 0.16, 0.38];   // 브러시 반지름(m)
-const CHAM_M = 1.05;                  // 카멜레온 몸길이(m)
-const FIND_R = 1.05;                  // 지목 판정 반경(m)
+const FIND_R = 0.45;                  // 지목 판정 보조 반경(m) — 직접 몸을 탭하면 무조건 성공
 
 // ---------------- UI 도우미 ----------------
 function show(el, on = true) { $(el).classList.toggle('hidden', !on); }
@@ -679,19 +677,6 @@ function paintAt(hit, last) {
   const ppm = (ud.ppmX + ud.ppmY) / 2;
   const r = BRUSH_M[game.brushSize] * ppm;
 
-  // 진짜 카멜레온 위에는 못 칠함
-  if (game.hidden && game.hidden.surface === s) {
-    const dx = x - game.hidden.px, dy = y - game.hidden.py;
-    const guard = game.hidden.sizePx * 0.62 + r;
-    if (dx * dx + dy * dy < guard * guard) {
-      if (!paintAt.warned || performance.now() - paintAt.warned > 1500) {
-        toast('🦎 카멜레온 위에는 그릴 수 없어요!', 1200);
-        paintAt.warned = performance.now();
-      }
-      return { s, x, y };
-    }
-  }
-
   const ctx = s.ctx;
   const drawDot = (cx2, cy2) => {
     if (game.tool === 'erase') {
@@ -732,45 +717,22 @@ function eyedrop(hit) {
 
 // ---------------- 숨기/가짜 배치 ----------------
 function placeChameleonAt(hit, isReal) {
-  const mesh = hit.object, ud = mesh.userData, s = ud.surface;
-  const { x, y } = uvToPx(s, hit.uv.x, hit.uv.y);
-  const ppm = (ud.ppmX + ud.ppmY) / 2;
-  const sizePx = CHAM_M * ppm;
-  const diff = DIFF[game.difficulty];
-
-  if (isReal && game.hidden) {
-    // 이전 자리 복원
-    const h = game.hidden;
-    if (h.snapshot) {
-      h.surface.ctx.putImageData(h.snapshot.data, h.snapshot.x, h.snapshot.y);
-      h.surface.dirty = true;
-    }
-  }
-  let snapshot = null;
   if (isReal) {
-    const pad2 = Math.ceil(sizePx * 0.85);
-    const sx = clamp(Math.round(x - pad2), 0, s.canvas.width - 1);
-    const sy = clamp(Math.round(y - pad2), 0, s.canvas.height - 1);
-    const sw = Math.min(pad2 * 2, s.canvas.width - sx);
-    const sh = Math.min(pad2 * 2, s.canvas.height - sy);
-    try { snapshot = { x: sx, y: sy, data: s.ctx.getImageData(sx, sy, sw, sh) }; } catch (e) {}
-  }
-  const eye = stampChameleon(s, x, y, sizePx, { bodyAlpha: diff.bodyAlpha });
-  const entry = {
-    surface: s, mesh, px: x, py: y, sizePx,
-    worldPos: hit.point.clone(), normal: worldNormalOf(hit),
-    snapshot, eye,
-  };
-  if (isReal) {
-    game.hidden = entry;
+    attachChameleon(game.cham, hit);
+    game.chamPlaced = true;
+    game.hidden = game.cham;
     $('readyBtn').disabled = false;
-    toast('🦎 위장 완료! 술래를 부를 준비가 되면 ✅', 1800);
+    toast('🦎 붙었다! 이제 몸을 색칠해서 위장하세요 🎨', 2000);
   } else {
-    game.decoys.push(entry);
+    // 가짜: 지금까지 칠한 내 모습을 그대로 복제
+    const decoy = buildChameleon(DIFF[game.difficulty].sizeScale, game.cham.surface);
+    decoy.group.traverse((o) => { o.userData.chamRole = 'decoy'; });
+    attachChameleon(decoy, hit);
+    game.decoys.push(decoy);
     game.decoysLeft--;
     $('decoyCount').textContent = game.decoysLeft;
     if (game.decoysLeft <= 0) $('decoyBtn').disabled = true;
-    toast('🃏 가짜 카멜레온 배치!', 1200);
+    toast('🃏 가짜 카멜레온 배치! (내 모습 복사)', 1400);
   }
   sfx.stamp();
 }
@@ -821,7 +783,9 @@ canvas.addEventListener('pointerdown', (e) => {
 
   if (game.paintMode && st === 'hide') {
     const paintPtrs = [...pointers.values()].filter((q) => q.kind === 'paint');
-    if (pointers.size === 0) {
+    if (e.pointerType === 'mouse' && e.button === 2) {
+      p.kind = 'look';               // PC: 우클릭 드래그 = 시점 회전
+    } else if (pointers.size === 0) {
       p.kind = 'paint';
       const hit = raycastScreen(e.clientX, e.clientY);
       if (hit && hit.object.userData.surface) {
@@ -834,8 +798,8 @@ canvas.addEventListener('pointerdown', (e) => {
       p.kind = 'look';
     }
   } else {
-    // 이동 모드: 왼쪽 하단 = 조이스틱
-    if (e.clientX < window.innerWidth * 0.42 && e.clientY > window.innerHeight * 0.3 && stickPtr === null) {
+    // 이동 모드: 왼쪽 하단 = 조이스틱 (터치 전용, 마우스는 WASD로 이동)
+    if (e.pointerType !== 'mouse' && e.clientX < window.innerWidth * 0.42 && e.clientY > window.innerHeight * 0.3 && stickPtr === null) {
       p.kind = 'stick';
       stickPtr = e.pointerId;
       p.ox = e.clientX; p.oy = e.clientY; p.vx = 0; p.vy = 0;
@@ -882,7 +846,7 @@ function pointerEnd(e) {
 
   if (game.state === 'hide' && game.placing) {
     const hit = raycastScreen(e.clientX, e.clientY);
-    if (hit && hit.object.userData.surface) {
+    if (hit && hit.object.userData.surface && !hit.object.userData.chamRole) {
       if (hit.point.distanceTo(player.pos) > 14) { toast('너무 멀어요! 좀 더 가까이 가세요', 1300); return; }
       const isReal = game.placing === 'real';
       openConfirm(isReal ? '🦎 여기에 숨을까요?' : '🃏 가짜를 놓을까요?', e.clientX, e.clientY, () => {
@@ -901,6 +865,23 @@ function pointerEnd(e) {
 canvas.addEventListener('pointerup', pointerEnd);
 canvas.addEventListener('pointercancel', pointerEnd);
 
+// ---------------- 키보드 (PC) ----------------
+const keys = {};
+window.addEventListener('keydown', (e) => {
+  keys[e.code] = true;
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+});
+window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+function keyMoveVec() {
+  let x = 0, y = 0;
+  if (keys.KeyW || keys.ArrowUp) y -= 1;
+  if (keys.KeyS || keys.ArrowDown) y += 1;
+  if (keys.KeyA || keys.ArrowLeft) x -= 1;
+  if (keys.KeyD || keys.ArrowRight) x += 1;
+  const len = Math.hypot(x, y);
+  return len > 0 ? { x: x / len, y: y / len } : null;
+}
+
 // ---------------- 술래 지목 ----------------
 function paintX(surface, x, y, ppmAvg) {
   const ctx = surface.ctx, s2 = 0.22 * ppmAvg;
@@ -915,16 +896,17 @@ function paintX(surface, x, y, ppmAvg) {
 }
 function makeGuess(hit) {
   const h = game.hidden;
-  const d = hit.point.distanceTo(h.worldPos);
-  if (d <= FIND_R) { endRound(true); return; }
+  const role = hit.object.userData.chamRole;
+  const d = hit.point.distanceTo(h.group.position);
+  // 진짜 몸을 직접 탭했거나 아주 가까운 곳 → 발견!
+  if (role === 'real' || d <= FIND_R) { endRound(true); return; }
 
   game.guesses--;
   $('guessPill').textContent = `🔍 ${game.guesses}`;
   const ud = hit.object.userData;
   if (ud.surface) paintX(ud.surface, ...(() => { const q = uvToPx(ud.surface, hit.uv.x, hit.uv.y); return [q.x, q.y]; })(), (ud.ppmX + ud.ppmY) / 2);
 
-  const nearDecoy = game.decoys.find((dc) => hit.point.distanceTo(dc.worldPos) <= FIND_R);
-  if (nearDecoy) { toast('🃏 가짜 카멜레온! 속았다!', 1800); sfx.decoy(); }
+  if (role === 'decoy') { toast('🃏 가짜 카멜레온! 속았다!', 1800); sfx.decoy(); }
   else {
     sfx.wrong();
     if (d < 2.5) toast('🔥 아주 뜨거워요!', 1400);
@@ -943,31 +925,20 @@ function scheduleBlink() {
 }
 function doBlinkStep(now) {
   const h = game.hidden;
-  if (!h || !h.eye || !h.eye.openData) return;
+  if (!h || !h.eyes) return;
   if (!game.blinking && now >= game.nextBlink) {
-    const { ex, ey, er, lidColor } = h.eye;
-    const ctx = h.surface.ctx;
-    ctx.save();
-    ctx.fillStyle = lidColor;
-    ctx.beginPath(); ctx.arc(ex, ey, er * 1.35, 0, 7); ctx.fill();
-    ctx.restore();
-    h.surface.dirty = true;
+    h.eyes.forEach((e) => e.scale.set(1, 0.12, 1));   // 눈 감기
     game.blinking = true;
     game.blinkUntil = now + 240;
   } else if (game.blinking && now >= game.blinkUntil) {
-    const { ex, ey, eb, openData } = h.eye;
-    h.surface.ctx.putImageData(openData, Math.round(ex - eb), Math.round(ey - eb));
-    h.surface.dirty = true;
+    h.eyes.forEach((e) => e.scale.set(1, 1, 1));       // 눈 뜨기
     game.blinking = false;
     scheduleBlink();
   }
 }
 function restoreEyeOpen() {
   const h = game.hidden;
-  if (game.blinking && h && h.eye && h.eye.openData) {
-    h.surface.ctx.putImageData(h.eye.openData, Math.round(h.eye.ex - h.eye.eb), Math.round(h.eye.ey - h.eye.eb));
-    h.surface.dirty = true;
-  }
+  if (h && h.eyes) h.eyes.forEach((e) => e.scale.set(1, 1, 1));
   game.blinking = false;
 }
 
@@ -996,7 +967,7 @@ function setPaintMode(on) {
   if (on) {
     setPlacing(null);
     stickHide(); stickPtr = null;
-    setHint('한 손가락: 그리기 · 두 손가락: 시점 회전');
+    setHint(isTouchDevice ? '한 손가락: 그리기 · 두 손가락: 시점 회전' : '드래그: 그리기 · 우클릭 드래그: 시점 회전 · WASD: 이동');
     updatePaintbarUI();
   } else setHint(game.placing ? '숨길 표면을 탭하세요' : '');
   if (!on) setHint('');
@@ -1007,7 +978,7 @@ function setPlacing(mode) {
   $('decoyBtn').classList.toggle('on', mode === 'decoy');
   if (mode) {
     setPaintModeQuiet(false);
-    setHint(mode === 'real' ? '🦎 숨을 곳(벽/바닥/상자)을 탭하세요' : '🃏 가짜를 놓을 곳을 탭하세요');
+    setHint(mode === 'real' ? '🦎 카멜레온이 붙을 곳(벽/바닥/상자)을 탭하세요' : '🃏 가짜를 붙일 곳을 탭하세요');
   } else if (!game.paintMode) setHint('');
 }
 function setPaintModeQuiet(on) {
@@ -1037,8 +1008,8 @@ function startHandoff(next) {
   $('hoEmoji').textContent = next === 'hide' ? '🎨' : '🔍';
   $('hoWho').textContent = `${teamLabel(team)} 차례`;
   $('hoDesc').innerHTML = next === 'hide'
-    ? `iPad를 <b>${team}팀</b>에게 전달하세요.<br>맵에 그림을 그리고 카멜레온을 위장시켜 숨기세요! (제한 ${fmtTime(HIDE_TIME)})<br><b style="color:#fca5a5">${seekerTeam() === 'A' ? 'A' : 'B'}팀(술래)은 화면을 보면 안 돼요! 🙈</b>`
-    : `iPad를 <b>${team}팀</b>에게 전달하세요.<br>숨어있는 진짜 카멜레온을 찾아 탭! (제한 ${fmtTime(SEEK_TIME)} · 지목 ${DIFF[game.difficulty].guesses}번)<br>💡 진짜는 아주 가끔 눈을 깜빡여요…`;
+    ? `기기를 <b>${team}팀</b>에게 전달하세요.<br>새하얀 카멜레온 몸을 색칠하고 벽에 붙어 위장하세요! (제한 ${fmtTime(HIDE_TIME)})<br><b style="color:#fca5a5">${seekerTeam() === 'A' ? 'A' : 'B'}팀(술래)은 화면을 보면 안 돼요! 🙈</b>`
+    : `기기를 <b>${team}팀</b>에게 전달하세요.<br>숨어있는 진짜 카멜레온을 찾아 탭! (제한 ${fmtTime(SEEK_TIME)} · 지목 ${DIFF[game.difficulty].guesses}번)<br>💡 진짜는 아주 가끔 눈을 깜빡여요…`;
   $('hoBtn').textContent = next === 'hide' ? '🎨 숨기 시작!' : '🔍 찾기 시작!';
   $('hoBtn').onclick = () => { sfx.click(); next === 'hide' ? beginHide() : beginSeek(); };
   show('handoff', true);
@@ -1047,6 +1018,10 @@ function startHandoff(next) {
 function beginHide() {
   show('handoff', false);
   buildMap();
+  // 내 카멜레온(새하얀 몸) 생성 — 배치 전까지 플레이어를 따라다님(3인칭)
+  game.cham = buildChameleon(DIFF[game.difficulty].sizeScale);
+  game.cham.group.traverse((o) => { o.userData.chamRole = 'real'; });
+  game.chamPlaced = false;
   game.hidden = null; game.decoys = []; game.decoysLeft = 3;
   game.placing = null; game.paintMode = false;
   game.tool = 'brush'; game.color = pick(PALETTE.slice(3));
@@ -1058,7 +1033,7 @@ function beginHide() {
   game.state = 'hide';
   setPhaseUI();
   updatePaintbarUI();
-  toast(`${teamLabel(game.hiderTeam)} — 그림으로 위장해 숨으세요!`, 2200);
+  toast(`${teamLabel(game.hiderTeam)} — 하얀 카멜레온을 색칠해서 위장하세요!`, 2600);
 }
 
 function autoPlace() {
@@ -1096,20 +1071,19 @@ let revealUntil = 0;
 function endRound(found) {
   restoreEyeOpen();
   const h = game.hidden;
-  // 노란 링으로 정답 공개
-  const ctx = h.surface.ctx;
-  ctx.save();
-  ctx.strokeStyle = '#fde047'; ctx.lineWidth = 5;
-  ctx.beginPath(); ctx.arc(h.px, h.py, h.sizePx * 0.72, 0, 7); ctx.stroke();
-  ctx.strokeStyle = 'rgba(253,224,71,.5)'; ctx.lineWidth = 10;
-  ctx.beginPath(); ctx.arc(h.px, h.py, h.sizePx * 0.85, 0, 7); ctx.stroke();
-  ctx.restore();
-  h.surface.dirty = true;
+  // 노란 링으로 정답 공개 (3D 링)
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.42, 0.56, 40),
+    new THREE.MeshBasicMaterial({ color: 0xfde047, side: THREE.DoubleSide, transparent: true, opacity: 0.95 }));
+  ring.position.copy(h.group.position).addScaledVector(h.normal, 0.12);
+  ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), h.normal);
+  ring.scale.setScalar(h.group.scale.x);
+  decorGroup.add(ring);
   // 정답 앞으로 카메라 이동
-  const camPos = h.worldPos.clone().addScaledVector(h.normal, 3.4);
+  const camPos = h.group.position.clone().addScaledVector(h.normal, 3.2);
   camPos.y = clamp(camPos.y, 1.2, 4);
   camera.position.copy(camPos);
-  camera.lookAt(h.worldPos);
+  camera.lookAt(h.group.position);
 
   if (found) { game[seekerTeam() === 'A' ? 'scoreA' : 'scoreB']++; sfx.found(); toast('🎯 찾았다!', 2000); }
   else { game[game.hiderTeam === 'A' ? 'scoreA' : 'scoreB']++; sfx.survive(); toast('🦎 숨기 성공!', 2000); }
@@ -1170,6 +1144,7 @@ camera.position.set(0, 10, 26);
 camera.lookAt(0, 1, 0);
 let menuAngle = 0;
 
+window.__dbg = { game, player };   // 디버그/테스트용
 const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
@@ -1183,20 +1158,38 @@ function animate() {
     camera.position.set(Math.sin(menuAngle) * 22, 12, Math.cos(menuAngle) * 22);
     camera.lookAt(0, 1, 0);
   } else if (st === 'hide' || st === 'seek') {
-    // 이동
+    // 이동 (터치 조이스틱 + 키보드)
+    let mvx = 0, mvy = 0;
     if (stickPtr !== null) {
       const p = pointers.get(stickPtr);
-      if (p) {
-        const f = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
-        const r = new THREE.Vector3(-f.z, 0, f.x);
-        player.pos.addScaledVector(f, -p.vy * player.speed * dt);
-        player.pos.addScaledVector(r, p.vx * player.speed * dt);
-        collide();
-      }
+      if (p) { mvx = p.vx; mvy = p.vy; }
     }
-    camera.position.copy(player.pos);
-    camera.rotation.order = 'YXZ';
-    camera.rotation.set(player.pitch, player.yaw, 0);
+    const kv = keyMoveVec();
+    if (kv) { mvx += kv.x; mvy += kv.y; }
+    const moving = !!(mvx || mvy);
+    if (moving) {
+      const f = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
+      const r = new THREE.Vector3(-f.z, 0, f.x);
+      player.pos.addScaledVector(f, -mvy * player.speed * dt);
+      player.pos.addScaledVector(r, mvx * player.speed * dt);
+      collide();
+    }
+    if (st === 'hide' && game.cham && !game.chamPlaced) {
+      // 3인칭: 내 카멜레온이 앞에서 걸어다님
+      const m = game.cham.group;
+      m.position.set(player.pos.x, moving ? 0.02 + Math.abs(Math.sin(now * 0.012)) * 0.05 : 0.02, player.pos.z);
+      m.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), player.yaw + Math.PI);
+      const back = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw));
+      camera.position.set(
+        player.pos.x + back.x * 2.7,
+        clamp(1.7 - player.pitch * 1.6, 0.5, 4.2),
+        player.pos.z + back.z * 2.7);
+      camera.lookAt(m.position.x, 0.45, m.position.z);
+    } else {
+      camera.position.copy(player.pos);
+      camera.rotation.order = 'YXZ';
+      camera.rotation.set(player.pitch, player.yaw, 0);
+    }
 
     // 타이머
     game.timer -= dt;
