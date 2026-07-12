@@ -97,11 +97,12 @@
   .sw.on { border-color:#fff; transform:scale(1.15); box-shadow:0 0 10px rgba(255,255,255,.6); }
   .tool { width:48px; height:48px; border:none; border-radius:14px; font-size:22px; background:rgba(255,255,255,.1); color:#fff; cursor:pointer; }
   .tool.on { background:#2563eb; box-shadow:inset 0 0 0 2.5px #bfdbfe; }
-  .sizes { display:flex; flex-direction:column; gap:5px; }
-  .sizeBtn { width:44px; border:none; border-radius:10px; background:rgba(255,255,255,.1); color:#fff; cursor:pointer;
-    display:flex; align-items:center; justify-content:center; height:22px; }
-  .sizeBtn.on { background:#16a34a; }
-  .dot { border-radius:50%; background:#fff; }
+  .brushCtl { display:flex; align-items:center; gap:10px; padding:0 4px; }
+  .brushCtl input[type=range] { -webkit-appearance:none; appearance:none; width:120px; height:36px; background:transparent; }
+  .brushCtl input[type=range]::-webkit-slider-runnable-track { height:8px; border-radius:4px; background:rgba(255,255,255,.25); }
+  .brushCtl input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:30px; height:30px; border-radius:50%;
+    background:#fff; margin-top:-11px; box-shadow:0 2px 6px rgba(0,0,0,.5); }
+  .dot { border-radius:50%; background:#fff; border:1.5px solid rgba(0,0,0,.35); flex:none; }
   #curColor { width:44px; height:44px; border-radius:12px; border:2.5px solid #fff; }
 
   /* ---------- 조이스틱 ---------- */
@@ -110,8 +111,24 @@
   #stickKnob { position:absolute; width:56px; height:56px; border-radius:50%; background:rgba(255,255,255,.45); display:none; pointer-events:none; }
 
   /* ---------- 조준점 ---------- */
-  #crosshair { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:14px; height:14px;
-    border:2.5px solid rgba(255,255,255,.85); border-radius:50%; box-shadow:0 0 6px rgba(0,0,0,.6); display:none; }
+  #crosshair { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:26px; height:26px;
+    border:2.5px solid rgba(255,255,255,.9); border-radius:50%; box-shadow:0 0 8px rgba(0,0,0,.6); display:none; }
+  #crosshair::after { content:''; position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    width:5px; height:5px; border-radius:50%; background:#ff5252; }
+
+  /* ---------- 발사/나가기 버튼 ---------- */
+  #fireBtn { position:absolute; right:calc(26px + env(safe-area-inset-right)); bottom:calc(30px + env(safe-area-inset-bottom));
+    width:104px; height:104px; border:none; border-radius:50%; color:#fff; font-size:17px; font-weight:900;
+    background:radial-gradient(circle at 35% 30%, #ff8a80, #d32f2f 70%); box-shadow:0 6px 18px rgba(0,0,0,.5), inset 0 0 0 4px rgba(255,255,255,.25);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; pointer-events:auto; cursor:pointer; }
+  #fireBtn .ico { font-size:34px; }
+  #fireBtn:active { transform:scale(.93); }
+  #exitBtn { position:absolute; left:calc(12px + env(safe-area-inset-left)); top:calc(10px + env(safe-area-inset-top));
+    width:52px; height:52px; border:none; border-radius:16px; font-size:24px; background:rgba(15,23,42,.75); color:#fff;
+    pointer-events:auto; cursor:pointer; backdrop-filter:blur(6px); }
+
+  /* ---------- 발사 플래시 ---------- */
+  #flash { position:fixed; inset:0; background:#fff; opacity:0; transition:opacity .14s; pointer-events:none; z-index:40; }
 
   /* ---------- 확인 팝업 ---------- */
   #confirm { position:fixed; z-index:80; background:rgba(10,14,28,.95); border-radius:18px; padding:16px 18px;
@@ -156,9 +173,9 @@
   <button class="btn" id="startBtn">게임 시작 ▶</button>
   <div id="howto">
     <b>🎮 방법</b> — <b style="color:#60a5fa">B팀(숨기)</b>: 새하얀 3D 카멜레온이 되어 맵을 돌아다니다, 원하는 벽·바닥·상자에 붙은 뒤 <b>내 몸에 직접 그림을 그려</b> 배경과 똑같이 위장해요 (💉 스포이드로 주변 색 추출!). 내 모습을 복사한 가짜 3마리로 술래를 속일 수도!
-    <b style="color:#f87171">A팀(술래)</b>: 기기를 넘겨받아 진짜 카멜레온을 찾아 탭! 진짜는 아주 가끔 <b>눈을 깜빡</b>여요…👀
-    라운드마다 역할이 바뀝니다.<br>
-    <span style="color:#93c5fd">🖥️ PC 조작: WASD 이동 · 마우스 드래그 시점 · 클릭으로 그리기/지목 (그리기 중 우클릭 드래그 = 시점)</span>
+    <b style="color:#f87171">A팀(술래)</b>: 기기를 넘겨받아 <b>🔫 샷건</b>으로 진짜 카멜레온을 쏘세요! 가까이서 쏠수록 명중. <b>빗나간 총알은 영영 소모</b>되고, 총알이 다 떨어지면 숨는 팀 승리! 진짜는 아주 가끔 <b>눈을 깜빡</b>여요…👀 라운드마다 역할이 바뀝니다.<br>
+    <span style="color:#a7f3d0">✏️ Apple Pencil 지원 · 두 손가락 벌리기 = 확대(디테일 작업) · ↩️ 되돌리기</span><br>
+    <span style="color:#93c5fd">🖥️ PC: WASD 이동 · 마우스 드래그 시점 · 클릭/스페이스 = 발사 · 휠 = 확대 (그리기 중 우클릭 드래그 = 시점)</span>
   </div>
 </div>
 
@@ -199,6 +216,8 @@
     <div class="pill" id="timer">2:30</div>
     <div class="pill hidden" id="guessPill">🔍 10</div>
   </div>
+  <button id="exitBtn" title="메뉴로">🏠</button>
+  <button id="fireBtn" class="hidden"><span class="ico">🔫</span>발사</button>
   <div class="actions" id="hideActions">
     <button class="act" id="paintModeBtn"><span class="ico">🎨</span>그리기</button>
     <button class="act" id="hideBtn"><span class="ico">🦎</span>숨기</button>
@@ -209,11 +228,11 @@
   <div id="paintbar" class="hidden">
     <div id="curColor"></div>
     <div class="swatches" id="swatches"></div>
-    <div class="sizes">
-      <button class="sizeBtn" data-s="0"><span class="dot" style="width:6px;height:6px"></span></button>
-      <button class="sizeBtn on" data-s="1"><span class="dot" style="width:11px;height:11px"></span></button>
-      <button class="sizeBtn" data-s="2"><span class="dot" style="width:17px;height:17px"></span></button>
+    <div class="brushCtl">
+      <div class="dot" id="brushPreview" style="width:14px;height:14px"></div>
+      <input type="range" id="brushRange" min="2" max="60" value="14">
     </div>
+    <button class="tool" id="undoTool" title="되돌리기">↩️</button>
     <button class="tool" id="brushTool" title="붓">🖌️</button>
     <button class="tool" id="dropTool" title="스포이드">💉</button>
     <button class="tool" id="eraseTool" title="지우개">🧽</button>
@@ -232,6 +251,7 @@
   </div>
 </div>
 
+<div id="flash"></div>
 <div id="toast"></div>
 <div id="hint" class="hidden"></div>
 

@@ -45,6 +45,19 @@ const sfx = {
   found: () => [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => tone(f, 0.16, 'triangle', 0.16), i * 110)),
   survive: () => [659, 784, 988, 1319].forEach((f, i) => setTimeout(() => tone(f, 0.16, 'sine', 0.15), i * 110)),
   tick: () => tone(1000, 0.05, 'sine', 0.05),
+  shot: () => {
+    try {
+      const a = ac(), len = 0.25;
+      const buf = a.createBuffer(1, Math.floor(a.sampleRate * len), a.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 2.2);
+      const src = a.createBufferSource(); src.buffer = buf;
+      const f = a.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 1100;
+      const g = a.createGain(); g.gain.value = 0.55;
+      src.connect(f); f.connect(g); g.connect(a.destination); src.start();
+      tone(85, 0.22, 'sine', 0.35, -40);
+    } catch (e) {}
+  },
 };
 
 // ---------------- 렌더러 / 씬 ----------------
@@ -493,6 +506,7 @@ function buildChameleon(sizeScale = 1, cloneFrom = null) {
       new THREE.SphereGeometry(0.048, 12, 10),
       new THREE.MeshLambertMaterial({ color: 0xfffbe8 }));
     eye.position.set(s * 0.095, 0.105, 0.345);
+    eye.userData.isEye = true;
     const pupil = new THREE.Mesh(
       new THREE.SphereGeometry(0.018, 8, 8),
       new THREE.MeshBasicMaterial({ color: 0x1c1c1c }));
@@ -573,13 +587,15 @@ const game = {
   decoys: [], decoysLeft: 3,
   placing: null,           // null | 'real' | 'decoy'
   paintMode: false,
-  tool: 'brush', brushSize: 1, color: '#e53e3e',
+  tool: 'brush', brushM: 0.14, color: '#e53e3e',
+  recoil: 0,
   nextBlink: 0, blinkUntil: 0, blinking: false,
   confirmOpen: false, pending: null,
   lastTickSec: -1,
 };
-const BRUSH_M = [0.06, 0.16, 0.38];   // 브러시 반지름(m)
-const FIND_R = 0.45;                  // 지목 판정 보조 반경(m) — 직접 몸을 탭하면 무조건 성공
+const SHOT_RANGE = 14;                // 샷건 사거리(m)
+const SHOT_PELLETS = 8;               // 펠릿 수
+const SHOT_SPREAD = 0.045;            // 퍼짐(rad) — 멀수록 잘 안 맞음
 
 // ---------------- UI 도우미 ----------------
 function show(el, on = true) { $(el).classList.toggle('hidden', !on); }
@@ -637,7 +653,6 @@ function updatePaintbarUI() {
   $('brushTool').classList.toggle('on', game.tool === 'brush');
   $('dropTool').classList.toggle('on', game.tool === 'drop');
   $('eraseTool').classList.toggle('on', game.tool === 'erase');
-  document.querySelectorAll('.sizeBtn').forEach((b) => b.classList.toggle('on', +b.dataset.s === game.brushSize));
 }
 function sameColor(a, b) {
   const cv = sameColor.cv || (sameColor.cv = document.createElement('canvas').getContext('2d'));
@@ -648,20 +663,56 @@ function sameColor(a, b) {
 $('brushTool').addEventListener('click', () => { game.tool = 'brush'; updatePaintbarUI(); sfx.click(); });
 $('dropTool').addEventListener('click', () => { game.tool = 'drop'; updatePaintbarUI(); sfx.click(); toast('💉 표면을 탭하면 색을 추출해요', 1400); });
 $('eraseTool').addEventListener('click', () => { game.tool = 'erase'; updatePaintbarUI(); sfx.click(); });
-document.querySelectorAll('.sizeBtn').forEach((b) => b.addEventListener('click', () => {
-  game.brushSize = +b.dataset.s; updatePaintbarUI(); sfx.click();
-}));
+// 브러시 크기 슬라이더 (2px~60px 표시 = 0.02m~0.60m)
+$('brushRange').addEventListener('input', (e) => {
+  const v = +e.target.value;
+  game.brushM = v / 100;
+  const d = $('brushPreview');
+  const px = clamp(v * 0.7, 5, 42);
+  d.style.width = px + 'px'; d.style.height = px + 'px';
+});
+
+// ---------------- 실행취소 (스트로크 단위) ----------------
+const undoStack = [];
+function pushUndo(surface) {
+  const cv = document.createElement('canvas');
+  cv.width = surface.canvas.width; cv.height = surface.canvas.height;
+  cv.getContext('2d').drawImage(surface.canvas, 0, 0);
+  undoStack.push({ surface, cv });
+  if (undoStack.length > 8) undoStack.shift();
+}
+$('undoTool').addEventListener('click', () => {
+  const u = undoStack.pop();
+  if (!u) { toast('되돌릴 그림이 없어요', 900); return; }
+  u.surface.ctx.drawImage(u.cv, 0, 0);
+  u.surface.dirty = true;
+  sfx.click();
+});
 
 // ---------------- 레이캐스트 ----------------
 const raycaster = new THREE.Raycaster();
-function raycastScreen(clientX, clientY) {
+function raycastScreen(clientX, clientY, skipEyes = false) {
   const ndc = new THREE.Vector2(
     (clientX / window.innerWidth) * 2 - 1,
     -(clientY / window.innerHeight) * 2 + 1);
   raycaster.setFromCamera(ndc, camera);
   const hits = raycaster.intersectObjects(solidMeshes, false);
-  return hits.length ? hits[0] : null;
+  for (const h of hits) {
+    if (skipEyes && h.object.userData.isEye) continue;   // 눈 뒤의 몸에 칠해짐
+    return h;
+  }
+  return null;
 }
+// 줌 (핀치/휠) — FOV 조절
+function setZoom(fov) {
+  camera.fov = clamp(fov, 20, 80);
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('wheel', (e) => {
+  if ((game.state === 'hide' && game.paintMode) || game.state === 'seek') {
+    setZoom(camera.fov + e.deltaY * 0.02);
+  }
+}, { passive: true });
 function worldNormalOf(hit) {
   const n = hit.face.normal.clone();
   n.transformDirection(hit.object.matrixWorld);
@@ -675,7 +726,7 @@ function paintAt(hit, last) {
   const s = ud.surface;
   const { x, y } = uvToPx(s, hit.uv.x, hit.uv.y);
   const ppm = (ud.ppmX + ud.ppmY) / 2;
-  const r = BRUSH_M[game.brushSize] * ppm;
+  const r = Math.max(1.5, game.brushM * ppm);
 
   const ctx = s.ctx;
   const drawDot = (cx2, cy2) => {
@@ -774,32 +825,41 @@ function stickHide() {
   $('stickBase').style.display = $('stickKnob').style.display = 'none';
 }
 
+let penActive = 0;   // Apple Pencil 팜 리젝션용
 canvas.addEventListener('pointerdown', (e) => {
   if (game.confirmOpen) return;
   const st = game.state;
   if (st !== 'hide' && st !== 'seek') return;
+  // 펜 사용 중 손바닥(터치) 무시
+  if (e.pointerType === 'touch' && penActive > 0) return;
   try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* 합성 이벤트 등 */ }
-  const p = { kind: 'look', sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, moved: 0, t0: performance.now(), last: null };
+  if (e.pointerType === 'pen') penActive++;
+  const p = { kind: 'look', type: e.pointerType, sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, moved: 0, t0: performance.now(), last: null };
 
   if (game.paintMode && st === 'hide') {
-    const paintPtrs = [...pointers.values()].filter((q) => q.kind === 'paint');
     if (e.pointerType === 'mouse' && e.button === 2) {
       p.kind = 'look';               // PC: 우클릭 드래그 = 시점 회전
-    } else if (pointers.size === 0) {
+    } else if (e.pointerType === 'pen' || pointers.size === 0) {
+      // Apple Pencil은 언제나 그리기 (터치가 남아 있어도)
+      if (e.pointerType === 'pen') {
+        [...pointers.values()].forEach((q) => {
+          if (q.kind === 'paint' && q.type === 'touch') { q.kind = 'look'; q.last = null; }
+        });
+      }
       p.kind = 'paint';
-      const hit = raycastScreen(e.clientX, e.clientY);
+      const hit = raycastScreen(e.clientX, e.clientY, true);
       if (hit && hit.object.userData.surface) {
         if (game.tool === 'drop') { eyedrop(hit); p.kind = 'look'; }
-        else p.last = paintAt(hit, null);
+        else { pushUndo(hit.object.userData.surface); p.last = paintAt(hit, null); }
       }
     } else {
-      // 두 번째 손가락 → 전부 시점 회전으로 전환
-      paintPtrs.forEach((q) => { q.kind = 'look'; q.last = null; });
+      // 두 번째 손가락 → 시점 회전/핀치 줌으로 전환
+      [...pointers.values()].forEach((q) => { if (q.kind === 'paint') { q.kind = 'look'; q.last = null; } });
       p.kind = 'look';
     }
   } else {
-    // 이동 모드: 왼쪽 하단 = 조이스틱 (터치 전용, 마우스는 WASD로 이동)
-    if (e.pointerType !== 'mouse' && e.clientX < window.innerWidth * 0.42 && e.clientY > window.innerHeight * 0.3 && stickPtr === null) {
+    // 이동 모드: 왼쪽 하단 = 조이스틱 (손가락 전용, 마우스는 WASD·펜은 시점)
+    if (e.pointerType === 'touch' && e.clientX < window.innerWidth * 0.42 && e.clientY > window.innerHeight * 0.3 && stickPtr === null) {
       p.kind = 'stick';
       stickPtr = e.pointerId;
       p.ox = e.clientX; p.oy = e.clientY; p.vx = 0; p.vy = 0;
@@ -812,7 +872,8 @@ canvas.addEventListener('pointerdown', (e) => {
 canvas.addEventListener('pointermove', (e) => {
   const p = pointers.get(e.pointerId);
   if (!p) return;
-  const dx = e.clientX - p.lx, dy = e.clientY - p.ly;
+  const prevX = p.lx, prevY = p.ly;
+  const dx = e.clientX - prevX, dy = e.clientY - prevY;
   p.moved += Math.abs(dx) + Math.abs(dy);
   p.lx = e.clientX; p.ly = e.clientY;
 
@@ -823,12 +884,21 @@ canvas.addEventListener('pointermove', (e) => {
     p.vx = vx / max; p.vy = vy / max;
     stickKnob(p.ox + vx, p.oy + vy);
   } else if (p.kind === 'look') {
-    const lookCount = [...pointers.values()].filter((q) => q.kind === 'look').length;
-    const f = lookCount > 1 ? 0.5 : 1;
+    const looks = [...pointers.values()].filter((q) => q.kind === 'look');
+    const f = looks.length > 1 ? 0.5 : 1;
     player.yaw -= dx * 0.0038 * f;
     player.pitch = clamp(player.pitch - dy * 0.0032 * f, -1.15, 1.15);
+    // 두 손가락 핀치 = 확대/축소 (그리기 모드·찾기 페이즈)
+    if (looks.length === 2 && (game.paintMode || game.state === 'seek')) {
+      const o = looks.find((q) => q !== p);
+      if (o) {
+        const prevDist = Math.hypot(prevX - o.lx, prevY - o.ly);
+        const newDist = Math.hypot(e.clientX - o.lx, e.clientY - o.ly);
+        setZoom(camera.fov + (prevDist - newDist) * 0.12);
+      }
+    }
   } else if (p.kind === 'paint') {
-    const hit = raycastScreen(e.clientX, e.clientY);
+    const hit = raycastScreen(e.clientX, e.clientY, true);
     if (hit && hit.object.userData.surface) p.last = paintAt(hit, p.last);
     else p.last = null;
   }
@@ -836,6 +906,7 @@ canvas.addEventListener('pointermove', (e) => {
 
 function pointerEnd(e) {
   const p = pointers.get(e.pointerId);
+  if (p && p.type === 'pen') penActive = Math.max(0, penActive - 1);
   if (!p) return;
   pointers.delete(e.pointerId);
   if (p.kind === 'stick' || e.pointerId === stickPtr) { stickPtr = null; stickHide(); }
@@ -845,7 +916,7 @@ function pointerEnd(e) {
   if (!isTap || game.confirmOpen) return;
 
   if (game.state === 'hide' && game.placing) {
-    const hit = raycastScreen(e.clientX, e.clientY);
+    const hit = raycastScreen(e.clientX, e.clientY, true);
     if (hit && hit.object.userData.surface && !hit.object.userData.chamRole) {
       if (hit.point.distanceTo(player.pos) > 14) { toast('너무 멀어요! 좀 더 가까이 가세요', 1300); return; }
       const isReal = game.placing === 'real';
@@ -854,12 +925,8 @@ function pointerEnd(e) {
         setPlacing(null);
       });
     } else toast('그릴 수 있는 표면을 탭하세요', 1200);
-  } else if (game.state === 'seek') {
-    const hit = raycastScreen(e.clientX, e.clientY);
-    if (hit && hit.object.userData.surface) {
-      if (hit.point.distanceTo(player.pos) > 16) { toast('너무 멀어요! 가까이 가서 지목하세요', 1300); return; }
-      openConfirm('🔍 여기를 지목할까요?', e.clientX, e.clientY, () => makeGuess(hit));
-    }
+  } else if (game.state === 'seek' && p.type === 'mouse') {
+    shoot();   // PC: 클릭 = 조준점으로 발사
   }
 }
 canvas.addEventListener('pointerup', pointerEnd);
@@ -870,6 +937,7 @@ const keys = {};
 window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+  if (e.code === 'Space' && game.state === 'seek') shoot();
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 function keyMoveVec() {
@@ -882,41 +950,77 @@ function keyMoveVec() {
   return len > 0 ? { x: x / len, y: y / len } : null;
 }
 
-// ---------------- 술래 지목 ----------------
-function paintX(surface, x, y, ppmAvg) {
-  const ctx = surface.ctx, s2 = 0.22 * ppmAvg;
+// ---------------- 술래 샷건 ----------------
+// 원작 규칙: 빗나간 탄약은 영영 소모, 카멜레온 명중 시 탄약 회복, 탄약 0 = 숨는 팀 승리
+function drawHole(surface, x, y, ppmAvg) {
+  const ctx = surface.ctx, r = Math.max(2, 0.035 * ppmAvg);
   ctx.save();
-  ctx.strokeStyle = 'rgba(220,38,38,.9)'; ctx.lineWidth = Math.max(3, ppmAvg * 0.05); ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(x - s2, y - s2); ctx.lineTo(x + s2, y + s2);
-  ctx.moveTo(x + s2, y - s2); ctx.lineTo(x - s2, y + s2);
-  ctx.stroke();
+  ctx.fillStyle = 'rgba(30,25,20,.85)';
+  ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,.9)';
+  ctx.beginPath(); ctx.arc(x, y, r * 0.5, 0, 7); ctx.fill();
   ctx.restore();
   surface.dirty = true;
 }
-function makeGuess(hit) {
-  const h = game.hidden;
-  const role = hit.object.userData.chamRole;
-  const d = hit.point.distanceTo(h.group.position);
-  // 진짜 몸을 직접 탭했거나 아주 가까운 곳 → 발견!
-  if (role === 'real' || d <= FIND_R) { endRound(true); return; }
+let lastShotAt = 0;
+function shoot() {
+  if (game.state !== 'seek' || game.confirmOpen) return;
+  const now = performance.now();
+  if (now - lastShotAt < 650 || game.guesses <= 0) return;
+  lastShotAt = now;
+  sfx.shot();
+  game.recoil = 0.09;
+  const fl = $('flash');
+  fl.style.opacity = 0.3;
+  setTimeout(() => { fl.style.opacity = 0; }, 70);
 
+  const fwd = new THREE.Vector3(); camera.getWorldDirection(fwd);
+  const right = new THREE.Vector3().crossVectors(fwd, camera.up).normalize();
+  const up = new THREE.Vector3().crossVectors(right, fwd).normalize();
+  let hitReal = false, hitDecoy = false, bestDist = Infinity, impacts = 0;
+  for (let i = 0; i < SHOT_PELLETS; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const rr = Math.sqrt(Math.random()) * SHOT_SPREAD;
+    const dir = fwd.clone()
+      .addScaledVector(right, Math.cos(a) * rr)
+      .addScaledVector(up, Math.sin(a) * rr).normalize();
+    raycaster.set(camera.position, dir);
+    raycaster.far = SHOT_RANGE;
+    const hits = raycaster.intersectObjects(solidMeshes, false);
+    raycaster.far = Infinity;
+    if (!hits.length) continue;
+    const h = hits[0];
+    impacts++;
+    const role = h.object.userData.chamRole;
+    if (role === 'real') hitReal = true;
+    else if (role === 'decoy') hitDecoy = true;
+    const ud = h.object.userData;
+    if (ud.surface && h.uv) {
+      const q = uvToPx(ud.surface, h.uv.x, h.uv.y);
+      drawHole(ud.surface, q.x, q.y, (ud.ppmX + ud.ppmY) / 2);
+    }
+    bestDist = Math.min(bestDist, h.point.distanceTo(game.hidden.group.position));
+  }
+
+  if (hitReal) { endRound(true); return; }   // 명중! (탄약 소모 없음 — 원작 규칙)
   game.guesses--;
-  $('guessPill').textContent = `🔍 ${game.guesses}`;
-  const ud = hit.object.userData;
-  if (ud.surface) paintX(ud.surface, ...(() => { const q = uvToPx(ud.surface, hit.uv.x, hit.uv.y); return [q.x, q.y]; })(), (ud.ppmX + ud.ppmY) / 2);
-
-  if (role === 'decoy') { toast('🃏 가짜 카멜레온! 속았다!', 1800); sfx.decoy(); }
+  $('guessPill').textContent = `🔫 ${game.guesses}`;
+  if (hitDecoy) { toast('🃏 가짜였다! 총알만 날렸다!', 1800); sfx.decoy(); }
+  else if (impacts === 0) { toast(`💨 허공에 발사! (사거리 ${SHOT_RANGE}m)`, 1400); sfx.wrong(); }
   else {
     sfx.wrong();
-    if (d < 2.5) toast('🔥 아주 뜨거워요!', 1400);
-    else if (d < 5) toast('♨️ 따뜻해요', 1400);
-    else if (d < 9) toast('😐 미지근해요', 1400);
-    else if (d < 15) toast('🧊 차가워요', 1400);
+    if (bestDist < 2.5) toast('🔥 아주 뜨거워요!', 1400);
+    else if (bestDist < 5) toast('♨️ 따뜻해요', 1400);
+    else if (bestDist < 9) toast('😐 미지근해요', 1400);
+    else if (bestDist < 15) toast('🧊 차가워요', 1400);
     else toast('❄️ 얼음이에요!', 1400);
   }
-  if (game.guesses <= 0) endRound(false);
+  if (game.guesses <= 0) {
+    toast('💥 탄약이 다 떨어졌다!', 1800);
+    setTimeout(() => { if (game.state === 'seek') endRound(false); }, 1100);
+  }
 }
+$('fireBtn').addEventListener('pointerdown', (e) => { e.preventDefault(); shoot(); });
 
 // ---------------- 눈 깜빡임 ----------------
 function scheduleBlink() {
@@ -951,6 +1055,8 @@ function setPhaseUI() {
   show('paintbar', hideUI && game.paintMode);
   show('readyBtn', hideUI && !game.paintMode);
   $('guessPill').classList.toggle('hidden', st !== 'seek');
+  $('crosshair').style.display = st === 'seek' ? 'block' : 'none';
+  show('fireBtn', st === 'seek');
   if (st === 'hide') {
     $('phaseLabel').textContent = `🦎 숨는 중 · ${teamLabel(game.hiderTeam)}`;
   } else if (st === 'seek') {
@@ -967,10 +1073,9 @@ function setPaintMode(on) {
   if (on) {
     setPlacing(null);
     stickHide(); stickPtr = null;
-    setHint(isTouchDevice ? '한 손가락: 그리기 · 두 손가락: 시점 회전' : '드래그: 그리기 · 우클릭 드래그: 시점 회전 · WASD: 이동');
+    setHint(isTouchDevice ? '✏️펜슬/손가락: 그리기 · 두 손가락: 시점 회전+핀치 확대' : '드래그: 그리기 · 우클릭 드래그: 시점 · 휠: 확대 · WASD: 이동');
     updatePaintbarUI();
-  } else setHint(game.placing ? '숨길 표면을 탭하세요' : '');
-  if (!on) setHint('');
+  } else { setHint(''); setZoom(70); }
 }
 function setPlacing(mode) {
   game.placing = mode;
@@ -999,6 +1104,15 @@ $('readyBtn').addEventListener('click', () => {
   sfx.click();
   startHandoff('seek');
 });
+$('exitBtn').addEventListener('click', () => {
+  sfx.click();
+  openConfirm('🏠 게임을 끝내고 메뉴로 나갈까요?', window.innerWidth / 2, window.innerHeight / 2, () => {
+    game.state = 'menu';
+    setPhaseUI(); stickHide(); pointers.clear(); stickPtr = null;
+    setHint(''); setZoom(70);
+    show('menu', true);
+  });
+});
 
 function startHandoff(next) {
   game.state = 'handoff';
@@ -1009,7 +1123,7 @@ function startHandoff(next) {
   $('hoWho').textContent = `${teamLabel(team)} 차례`;
   $('hoDesc').innerHTML = next === 'hide'
     ? `기기를 <b>${team}팀</b>에게 전달하세요.<br>새하얀 카멜레온 몸을 색칠하고 벽에 붙어 위장하세요! (제한 ${fmtTime(HIDE_TIME)})<br><b style="color:#fca5a5">${seekerTeam() === 'A' ? 'A' : 'B'}팀(술래)은 화면을 보면 안 돼요! 🙈</b>`
-    : `기기를 <b>${team}팀</b>에게 전달하세요.<br>숨어있는 진짜 카멜레온을 찾아 탭! (제한 ${fmtTime(SEEK_TIME)} · 지목 ${DIFF[game.difficulty].guesses}번)<br>💡 진짜는 아주 가끔 눈을 깜빡여요…`;
+    : `기기를 <b>${team}팀</b>에게 전달하세요.<br>🔫 샷건으로 진짜 카멜레온을 쏘세요! (제한 ${fmtTime(SEEK_TIME)} · 탄약 ${DIFF[game.difficulty].guesses}발)<br><b style="color:#fca5a5">빗나간 총알은 영영 소모!</b> 탄약이 다 떨어지면 숨는 팀 승리<br>💡 진짜는 아주 가끔 눈을 깜빡여요…`;
   $('hoBtn').textContent = next === 'hide' ? '🎨 숨기 시작!' : '🔍 찾기 시작!';
   $('hoBtn').onclick = () => { sfx.click(); next === 'hide' ? beginHide() : beginSeek(); };
   show('handoff', true);
@@ -1025,6 +1139,8 @@ function beginHide() {
   game.hidden = null; game.decoys = []; game.decoysLeft = 3;
   game.placing = null; game.paintMode = false;
   game.tool = 'brush'; game.color = pick(PALETTE.slice(3));
+  undoStack.length = 0;
+  setZoom(70);
   $('decoyCount').textContent = '3';
   $('decoyBtn').disabled = false;
   $('readyBtn').disabled = true;
@@ -1055,15 +1171,17 @@ function autoPlace() {
 function beginSeek() {
   show('handoff', false);
   game.guesses = DIFF[game.difficulty].guesses;
-  $('guessPill').textContent = `🔍 ${game.guesses}`;
+  $('guessPill').textContent = `🔫 ${game.guesses}`;
   game.paintMode = false; game.placing = null;
+  game.recoil = 0;
+  setZoom(70);
   player.reset(0, 18, 0);
   game.timer = SEEK_TIME;
   game.state = 'seek';
   setPhaseUI();
   scheduleBlink();
-  setHint('의심스러운 곳을 탭해서 지목하세요');
-  setTimeout(() => setHint(''), 4000);
+  setHint('🔫 조준점을 맞추고 발사! 가까울수록 잘 맞아요');
+  setTimeout(() => setHint(''), 4500);
 }
 
 // ---------------- 라운드 종료 ----------------
@@ -1188,7 +1306,8 @@ function animate() {
     } else {
       camera.position.copy(player.pos);
       camera.rotation.order = 'YXZ';
-      camera.rotation.set(player.pitch, player.yaw, 0);
+      camera.rotation.set(player.pitch + game.recoil, player.yaw, 0);
+      game.recoil *= Math.exp(-dt * 9);   // 반동 회복
     }
 
     // 타이머
