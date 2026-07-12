@@ -630,9 +630,8 @@ segWire('segRounds', (v) => { game.rounds = parseInt(v, 10); });
 segWire('segDiff', (v) => { game.difficulty = v; });
 
 // ---------------- 페인트 팔레트 ----------------
-const PALETTE = ['#ffffff', '#1a202c', '#a0aec0', '#e53e3e', '#dd6b20', '#f6e05e',
-  '#84cc16', '#38a169', '#2f855a', '#4fd1c5', '#3182ce', '#2c5282',
-  '#805ad5', '#ed64a6', '#8b5e3c', '#d9b98a'];
+// 어차피 스포이드로 찍는 게 핵심이라 프리셋은 최소한만 + 전체 색상 피커
+const PALETTE = ['#ffffff', '#1a202c', '#8a939e', '#e53e3e', '#f6e05e', '#3182ce'];
 {
   const wrap = $('swatches');
   PALETTE.forEach((c) => {
@@ -645,8 +644,14 @@ const PALETTE = ['#ffffff', '#1a202c', '#a0aec0', '#e53e3e', '#dd6b20', '#f6e05e
     wrap.appendChild(d);
   });
 }
+function toHex(color) {
+  const cv = toHex.cv || (toHex.cv = document.createElement('canvas').getContext('2d'));
+  cv.fillStyle = color;
+  return cv.fillStyle;
+}
+function sameColor(a, b) { return toHex(a) === toHex(b); }
 function updatePaintbarUI() {
-  $('curColor').style.background = game.color;
+  $('colorPicker').value = toHex(game.color);
   document.querySelectorAll('.sw').forEach((s) => {
     s.classList.toggle('on', s.style.background && sameColor(s.style.background, game.color));
   });
@@ -654,12 +659,11 @@ function updatePaintbarUI() {
   $('dropTool').classList.toggle('on', game.tool === 'drop');
   $('eraseTool').classList.toggle('on', game.tool === 'erase');
 }
-function sameColor(a, b) {
-  const cv = sameColor.cv || (sameColor.cv = document.createElement('canvas').getContext('2d'));
-  cv.fillStyle = a; const s1 = cv.fillStyle;
-  cv.fillStyle = b; const s2 = cv.fillStyle;
-  return s1 === s2;
-}
+$('colorPicker').addEventListener('input', (e) => {
+  game.color = e.target.value;
+  game.tool = 'brush';
+  updatePaintbarUI();
+});
 $('brushTool').addEventListener('click', () => { game.tool = 'brush'; updatePaintbarUI(); sfx.click(); });
 $('dropTool').addEventListener('click', () => { game.tool = 'drop'; updatePaintbarUI(); sfx.click(); toast('💉 표면을 탭하면 색을 추출해요', 1400); });
 $('eraseTool').addEventListener('click', () => { game.tool = 'erase'; updatePaintbarUI(); sfx.click(); });
@@ -720,13 +724,23 @@ function worldNormalOf(hit) {
 }
 
 // ---------------- 그리기 ----------------
-function paintAt(hit, last) {
+// 원작 방식: 칠은 오직 '내 카멜레온 몸'에만! 벽 색은 스포이드로 추출해서 몸에 입힘
+function paintAt(hit, last, pressure = 0.5, isPen = false) {
   const mesh = hit.object, ud = mesh.userData;
   if (!ud.surface) return null;
   const s = ud.surface;
+  if (!game.cham || s !== game.cham.surface) {
+    if (!paintAt.warned || performance.now() - paintAt.warned > 2000) {
+      toast('🦎 내 몸에만 칠할 수 있어요! 벽 색은 💉 스포이드로', 1500);
+      paintAt.warned = performance.now();
+    }
+    return null;
+  }
   const { x, y } = uvToPx(s, hit.uv.x, hit.uv.y);
   const ppm = (ud.ppmX + ud.ppmY) / 2;
-  const r = Math.max(1.5, game.brushM * ppm);
+  // 애플펜슬 필압으로 굵기 조절 (살살 = 가늘게, 꾹 = 굵게)
+  const pressF = isPen ? (0.25 + clamp(pressure, 0.05, 1) * 1.5) : 1;
+  const r = Math.max(1.2, game.brushM * ppm * pressF);
 
   const ctx = s.ctx;
   const drawDot = (cx2, cy2) => {
@@ -850,7 +864,10 @@ canvas.addEventListener('pointerdown', (e) => {
       const hit = raycastScreen(e.clientX, e.clientY, true);
       if (hit && hit.object.userData.surface) {
         if (game.tool === 'drop') { eyedrop(hit); p.kind = 'look'; }
-        else { pushUndo(hit.object.userData.surface); p.last = paintAt(hit, null); }
+        else {
+          if (game.cham && hit.object.userData.surface === game.cham.surface) pushUndo(game.cham.surface);
+          p.last = paintAt(hit, null, e.pressure, e.pointerType === 'pen');
+        }
       }
     } else {
       // 두 번째 손가락 → 시점 회전/핀치 줌으로 전환
@@ -899,7 +916,7 @@ canvas.addEventListener('pointermove', (e) => {
     }
   } else if (p.kind === 'paint') {
     const hit = raycastScreen(e.clientX, e.clientY, true);
-    if (hit && hit.object.userData.surface) p.last = paintAt(hit, p.last);
+    if (hit && hit.object.userData.surface) p.last = paintAt(hit, p.last, e.pressure, p.type === 'pen');
     else p.last = null;
   }
 });
@@ -1073,7 +1090,7 @@ function setPaintMode(on) {
   if (on) {
     setPlacing(null);
     stickHide(); stickPtr = null;
-    setHint(isTouchDevice ? '✏️펜슬/손가락: 그리기 · 두 손가락: 시점 회전+핀치 확대' : '드래그: 그리기 · 우클릭 드래그: 시점 · 휠: 확대 · WASD: 이동');
+    setHint(isTouchDevice ? '🦎 내 몸에만 칠해져요 · ✏️펜슬 필압=굵기 · 💉벽 색 추출 · 두 손가락: 회전/확대' : '🦎 내 몸에만 칠해져요 · 💉벽 색 추출 · 우클릭: 시점 · 휠: 확대');
     updatePaintbarUI();
   } else { setHint(''); setZoom(70); }
 }

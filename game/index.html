@@ -92,7 +92,7 @@
   #paintbar { position:absolute; left:50%; transform:translateX(-50%); bottom:calc(14px + env(safe-area-inset-bottom));
     display:flex; align-items:center; gap:10px; background:rgba(8,12,24,.85); border-radius:22px; padding:10px 14px;
     pointer-events:auto; backdrop-filter:blur(8px); max-width:92vw; }
-  .swatches { display:flex; gap:7px; flex-wrap:wrap; max-width:420px; }
+  .swatches { display:flex; gap:7px; flex-wrap:nowrap; }
   .sw { width:34px; height:34px; border-radius:50%; border:2.5px solid rgba(255,255,255,.25); cursor:pointer; }
   .sw.on { border-color:#fff; transform:scale(1.15); box-shadow:0 0 10px rgba(255,255,255,.6); }
   .tool { width:48px; height:48px; border:none; border-radius:14px; font-size:22px; background:rgba(255,255,255,.1); color:#fff; cursor:pointer; }
@@ -103,7 +103,10 @@
   .brushCtl input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:30px; height:30px; border-radius:50%;
     background:#fff; margin-top:-11px; box-shadow:0 2px 6px rgba(0,0,0,.5); }
   .dot { border-radius:50%; background:#fff; border:1.5px solid rgba(0,0,0,.35); flex:none; }
-  #curColor { width:44px; height:44px; border-radius:12px; border:2.5px solid #fff; }
+  #colorPicker { -webkit-appearance:none; appearance:none; width:50px; height:50px; border:2.5px solid #fff;
+    border-radius:14px; padding:0; background:none; cursor:pointer; }
+  #colorPicker::-webkit-color-swatch-wrapper { padding:2px; }
+  #colorPicker::-webkit-color-swatch { border:none; border-radius:10px; }
 
   /* ---------- 조이스틱 ---------- */
   #stickBase { position:absolute; width:130px; height:130px; border-radius:50%; background:rgba(255,255,255,.09);
@@ -174,7 +177,7 @@
   <div id="howto">
     <b>🎮 방법</b> — <b style="color:#60a5fa">B팀(숨기)</b>: 새하얀 3D 카멜레온이 되어 맵을 돌아다니다, 원하는 벽·바닥·상자에 붙은 뒤 <b>내 몸에 직접 그림을 그려</b> 배경과 똑같이 위장해요 (💉 스포이드로 주변 색 추출!). 내 모습을 복사한 가짜 3마리로 술래를 속일 수도!
     <b style="color:#f87171">A팀(술래)</b>: 기기를 넘겨받아 <b>🔫 샷건</b>으로 진짜 카멜레온을 쏘세요! 가까이서 쏠수록 명중. <b>빗나간 총알은 영영 소모</b>되고, 총알이 다 떨어지면 숨는 팀 승리! 진짜는 아주 가끔 <b>눈을 깜빡</b>여요…👀 라운드마다 역할이 바뀝니다.<br>
-    <span style="color:#a7f3d0">✏️ Apple Pencil 지원 · 두 손가락 벌리기 = 확대(디테일 작업) · ↩️ 되돌리기</span><br>
+    <span style="color:#a7f3d0">✏️ Apple Pencil 필압으로 굵기 조절 · 칠은 내 몸에만! (벽 색은 💉 스포이드로 추출) · 두 손가락 = 회전/확대 · ↩️ 되돌리기</span><br>
     <span style="color:#93c5fd">🖥️ PC: WASD 이동 · 마우스 드래그 시점 · 클릭/스페이스 = 발사 · 휠 = 확대 (그리기 중 우클릭 드래그 = 시점)</span>
   </div>
 </div>
@@ -226,7 +229,7 @@
   <button class="btn small hidden" id="readyBtn" disabled>✅ 다 숨었어요!</button>
 
   <div id="paintbar" class="hidden">
-    <div id="curColor"></div>
+    <input type="color" id="colorPicker" value="#e53e3e" title="색상 선택">
     <div class="swatches" id="swatches"></div>
     <div class="brushCtl">
       <div class="dot" id="brushPreview" style="width:14px;height:14px"></div>
