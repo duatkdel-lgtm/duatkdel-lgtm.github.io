@@ -787,13 +787,7 @@ function paintAt(hit, last, pressure = 0.5, isPen = false) {
   const mesh = hit.object, ud = mesh.userData;
   if (!ud.surface) return null;
   const s = ud.surface;
-  if (!game.cham || s !== game.cham.surface) {
-    if (!paintAt.warned || performance.now() - paintAt.warned > 2000) {
-      toast('🕴️ 내 몸에만 칠할 수 있어요! 벽 색은 💉 스포이드로', 1500);
-      paintAt.warned = performance.now();
-    }
-    return null;
-  }
+  if (!game.cham || s !== game.cham.surface) return null;   // 몸 밖은 조용히 무시
   const { x, y } = uvToPx(s, hit.uv.x, hit.uv.y);
   const ppm = (ud.ppmX + ud.ppmY) / 2;
   // 애플펜슬 필압으로 굵기 조절 (살살 = 가늘게, 꾹 = 굵게)
@@ -1032,8 +1026,9 @@ function pointerEnd(e) {
   const isTap = p.moved < 14 && performance.now() - p.t0 < 420 && p.kind === 'look';
   if (!isTap || game.confirmOpen) return;
 
-  if (game.state === 'hide') {
+  if (game.state === 'hide' && !game.paintMode) {
     // 벽/바닥/상자를 그냥 탭하면 그 자리에 붙음 (🃏 모드면 가짜 배치)
+    // 그리기 모드에서는 시점 이동과 그리기만 — 탭해도 아무 반응 없음
     const hit = raycastScreen(e.clientX, e.clientY, true);
     const isDecoy = game.placing === 'decoy';
     if (hit && hit.object.userData.surface && !hit.object.userData.chamRole) {
