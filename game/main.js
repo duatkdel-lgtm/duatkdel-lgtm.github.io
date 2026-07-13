@@ -1088,6 +1088,7 @@ function buildJelly(sizeScale = 1, cloneFrom = null) {
     worldPos: new THREE.Vector3(), normal: new THREE.Vector3(0, 1, 0),
   };
   applyPose(j, 0);
+  g.traverse((o) => { o.userData.jelly = j; });
   return j;
 }
 
@@ -1183,6 +1184,12 @@ const game = {
   state: 'menu',           // menu | handoff | hide | seek | reveal | result | gameover
   rounds: 4, round: 1, difficulty: 'normal',
   map: 'town',             // 'town' | 'gym'(노네임피트니스)
+  partyN: 0,               // 0 = 2팀 대전, 3~6 = 파티 인원
+  scores: [],              // 파티 개인 점수
+  seekerIdx: 0,            // 이번 라운드 술래(파티)
+  hiderQueue: [], subIdx: 0,
+  hiddenList: [],          // 숨은 젤리맨들 [{jelly, owner, found, nextBlink, breathUntil}]
+  catches: 0,
   hideTime: 60,            // 숨는 시간(초) — 메뉴에서 30/60/90초 방 선택
   scoreA: 0, scoreB: 0,
   hiderTeam: 'B',          // 이번 라운드에 숨는 팀
@@ -1238,6 +1245,17 @@ function segWire(id, cb) {
 segWire('segRounds', (v) => { game.rounds = parseInt(v, 10); });
 segWire('segDiff', (v) => { game.difficulty = v; });
 segWire('segTime', (v) => { game.hideTime = parseInt(v, 10); });
+segWire('segMode', (v) => { game.partyN = v === 'duo' ? 0 : parseInt(v, 10); });
+const P_COLORS = ['🔴', '🔵', '🟢', '🟡', '🟣', '🟠'];
+function pName(i) { return `${P_COLORS[i % 6]} P${i + 1}`; }
+function isParty() { return game.partyN >= 3; }
+function setupPartyRound() {
+  game.seekerIdx = game.round - 1;
+  game.hiderQueue = [...Array(game.partyN).keys()].filter((i) => i !== game.seekerIdx);
+  game.subIdx = 0;
+  game.hiddenList = [];
+  game.catches = 0;
+}
 segWire('segMap', (v) => {
   game.map = v;
   if (game.state === 'menu') buildMap();   // 메뉴 배경 미리보기 교체
@@ -1579,7 +1597,7 @@ canvas.addEventListener('pointerdown', (e) => {
     } else if (st === 'hide' && game.cham && !game.placing) {
       // 내 젤리맨을 직접 잡으면: 팔다리 = 관절 드래그, 몸통 = 벽 위 회전
       const hit = raycastScreen(e.clientX, e.clientY);
-      if (hit && hit.object.userData.chamRole === 'real') {
+      if (hit && hit.object.userData.chamRole === 'real' && hit.object.userData.jelly === game.cham) {
         const lk = hit.object.userData.limb;
         if (lk) {
           p.kind = 'poseLimb'; p.limb = lk;
@@ -1738,7 +1756,8 @@ function shoot() {
   const fwd = new THREE.Vector3(); camera.getWorldDirection(fwd);
   const right = new THREE.Vector3().crossVectors(fwd, camera.up).normalize();
   const up = new THREE.Vector3().crossVectors(right, fwd).normalize();
-  let hitReal = false, hitDecoy = false, bestDist = Infinity, impacts = 0;
+  const caughtNow = [];
+  let hitDecoy = false, bestDist = Infinity, impacts = 0;
   for (let i = 0; i < SHOT_PELLETS; i++) {
     const a = Math.random() * Math.PI * 2;
     const rr = Math.sqrt(Math.random()) * SHOT_SPREAD;
@@ -1753,17 +1772,34 @@ function shoot() {
     const h = hits[0];
     impacts++;
     const role = h.object.userData.chamRole;
-    if (role === 'real') hitReal = true;
-    else if (role === 'decoy') hitDecoy = true;
+    if (role === 'real') {
+      const entry = game.hiddenList.find((x) => x.jelly === h.object.userData.jelly && !x.found);
+      if (entry && !caughtNow.includes(entry)) caughtNow.push(entry);
+    } else if (role === 'decoy') hitDecoy = true;
     const ud = h.object.userData;
     if (ud.surface && h.uv) {
       const q = uvToPx(ud.surface, h.uv.x, h.uv.y);
       drawHole(ud.surface, q.x, q.y, (ud.ppmX + ud.ppmY) / 2);
     }
-    bestDist = Math.min(bestDist, h.point.distanceTo(game.hidden.worldPos));
+    game.hiddenList.forEach((x) => {
+      if (!x.found) bestDist = Math.min(bestDist, h.point.distanceTo(x.jelly.worldPos));
+    });
   }
 
-  if (hitReal) { endRound(true); return; }   // 명중! (탄약 소모 없음 — 원작 규칙)
+  const k = game.hiddenList.length;
+  if (caughtNow.length) {
+    // 명중! 탄약 소모 없음(원작 규칙), 전원 검거 시 라운드 종료
+    caughtNow.forEach((e) => catchJelly(e));
+    sfx.found();
+    setPhaseUI();
+    if (game.catches >= k) {
+      toast(isParty() ? '🏆 전원 검거!' : '🎯 찾았다!', 1800);
+      setTimeout(() => { if (game.state === 'seek') endRound(true); }, 900);
+    } else {
+      toast(`🎯 ${isParty() ? pName(caughtNow[0].owner) : '젤리맨'} 발견! (${game.catches}/${k})`, 1800);
+    }
+    return;
+  }
   game.guesses--;
   $('guessPill').textContent = `🔫 ${game.guesses}`;
   if (hitDecoy) { toast('🃏 가짜였다! 총알만 날렸다!', 1800); sfx.decoy(); }
@@ -1781,6 +1817,21 @@ function shoot() {
     setTimeout(() => { if (game.state === 'seek') endRound(false); }, 1100);
   }
 }
+// 검거: 빨간 X 도장 + 카운트
+function catchJelly(e) {
+  e.found = true;
+  game.catches++;
+  const s = e.jelly.surface, ctx = s.ctx, W = s.canvas.width, H = s.canvas.height;
+  ctx.save();
+  ctx.fillStyle = 'rgba(220,38,38,.25)'; ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(185,28,28,.95)'; ctx.lineWidth = 26; ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(50, 50); ctx.lineTo(W - 50, H - 50);
+  ctx.moveTo(W - 50, 50); ctx.lineTo(50, H - 50);
+  ctx.stroke();
+  ctx.restore();
+  s.dirty = true;
+}
 $('fireBtn').addEventListener('pointerdown', (e) => { e.preventDefault(); shoot(); });
 
 // ---------------- 숨쉬기 (눈이 없는 젤리맨의 유일한 단서) ----------------
@@ -1791,27 +1842,31 @@ function scheduleBlink() {
   game.nextBlink = performance.now() + rand(d.blinkMin, d.blinkMax) * 1000;
 }
 function doBlinkStep(now) {
-  const h = game.hidden;
-  if (!h) return;
-  if (!game.blinking && now >= game.nextBlink) {
-    game.blinking = true;
-    game.blinkUntil = now + BREATH_DUR;
-  } else if (game.blinking) {
-    const t = 1 - (game.blinkUntil - now) / BREATH_DUR;
-    if (t >= 1) {
-      h.group.scale.set(h.baseScale, h.baseScale * h.squash, h.baseScale);
-      game.blinking = false;
-      scheduleBlink();
-    } else {
-      const amp = DIFF[game.difficulty].breath;
-      const s = 1 + Math.sin(t * Math.PI) * amp;
-      h.group.scale.set(h.baseScale * s, h.baseScale * h.squash, h.baseScale * s);  // 옆으로 볼록
+  const d = DIFF[game.difficulty];
+  game.hiddenList.forEach((h) => {
+    if (h.found) return;
+    const j = h.jelly;
+    if (!h.breathUntil && now >= h.nextBlink) {
+      h.breathUntil = now + BREATH_DUR;
+    } else if (h.breathUntil) {
+      const t = 1 - (h.breathUntil - now) / BREATH_DUR;
+      if (t >= 1) {
+        j.group.scale.set(j.baseScale, j.baseScale * j.squash, j.baseScale);
+        h.breathUntil = 0;
+        h.nextBlink = now + rand(d.blinkMin, d.blinkMax) * 1000;
+      } else {
+        const sc = 1 + Math.sin(t * Math.PI) * d.breath;
+        j.group.scale.set(j.baseScale * sc, j.baseScale * j.squash, j.baseScale * sc);
+      }
     }
-  }
+  });
 }
 function restoreEyeOpen() {
-  const h = game.hidden;
-  if (h) h.group.scale.set(h.baseScale, h.baseScale * h.squash, h.baseScale);
+  game.hiddenList.forEach((h) => {
+    const j = h.jelly;
+    j.group.scale.set(j.baseScale, j.baseScale * j.squash, j.baseScale);
+    h.breathUntil = 0;
+  });
   game.blinking = false;
 }
 
@@ -1827,9 +1882,13 @@ function setPhaseUI() {
   $('crosshair').style.display = st === 'seek' ? 'block' : 'none';
   show('fireBtn', st === 'seek');
   if (st === 'hide') {
-    $('phaseLabel').textContent = `🕴️ 숨는 중 · ${teamLabel(game.hiderTeam)}`;
+    $('phaseLabel').textContent = isParty()
+      ? `🕴️ 숨는 중 · ${pName(game.hiderQueue[game.subIdx])}`
+      : `🕴️ 숨는 중 · ${teamLabel(game.hiderTeam)}`;
   } else if (st === 'seek') {
-    $('phaseLabel').textContent = `🔍 찾는 중 · ${teamLabel(seekerTeam())}`;
+    $('phaseLabel').textContent = isParty()
+      ? `🔍 술래 ${pName(game.seekerIdx)} · ${game.catches}/${game.hiddenList.length}`
+      : `🔍 찾는 중 · ${teamLabel(seekerTeam())}`;
   }
 }
 function seekerTeam() { return game.hiderTeam === 'A' ? 'B' : 'A'; }
@@ -1924,8 +1983,21 @@ $('decoyBtn').addEventListener('click', () => {
 $('readyBtn').addEventListener('click', () => {
   if (!game.hidden) return;
   sfx.click();
-  startHandoff('seek');
+  finalizeHider();
 });
+// 현재 숨는 사람 확정 → 다음 사람 or 술래
+function finalizeHider() {
+  const entry = { jelly: game.cham, owner: isParty() ? game.hiderQueue[game.subIdx] : -1, found: false, nextBlink: 0, breathUntil: 0 };
+  if (isParty()) {
+    game.hiddenList.push(entry);
+    game.subIdx++;
+    if (game.subIdx < game.hiderQueue.length) startHandoff('hide');
+    else startHandoff('seek');
+  } else {
+    game.hiddenList = [entry];
+    startHandoff('seek');
+  }
+}
 $('exitBtn').addEventListener('click', () => {
   sfx.click();
   openConfirm('🏠 게임을 끝내고 메뉴로 나갈까요?', window.innerWidth / 2, window.innerHeight / 2, () => {
@@ -1946,26 +2018,38 @@ function startHandoff(next) {
   $('poseBtn').classList.remove('on');
   setPhaseUI(); stickHide(); pointers.clear(); stickPtr = null;
   closeConfirm(); setHint('');
-  const team = next === 'hide' ? game.hiderTeam : seekerTeam();
-  $('hoEmoji').textContent = next === 'hide' ? '🎨' : '🔍';
-  $('hoWho').textContent = `${teamLabel(team)} 차례`;
-  const scoreLine = `<span style="color:#94a3b8">라운드 ${game.round}/${game.rounds} · 🔴 A ${game.scoreA} : ${game.scoreB} B 🔵</span><br>`;
-  $('hoDesc').innerHTML = scoreLine + (next === 'hide'
-    ? `기기를 <b>${team}팀</b>에게 전달하세요.<br>새하얀 젤리맨 몸을 색칠하고 자세를 잡아 벽에 붙으세요! (제한 ${fmtTime(game.hideTime)})<br><b style="color:#fca5a5">${seekerTeam() === 'A' ? 'A' : 'B'}팀(술래)은 화면을 보면 안 돼요! 🙈</b>`
-    : `기기를 <b>${team}팀</b>에게 전달하세요.<br>🔫 샷건으로 진짜 젤리맨을 쏘세요! (제한 ${fmtTime(SEEK_TIME)} · 탄약 ${DIFF[game.difficulty].guesses}발)<br><b style="color:#fca5a5">빗나간 총알은 영영 소모!</b> 탄약이 다 떨어지면 숨는 팀 승리<br>💡 진짜는 아주 가끔 <b>후우~ 하고 숨을 쉬어요</b> (몸이 살짝 부풀었다 꺼짐)`);
-  $('hoBtn').textContent = next === 'hide' ? '🎨 숨기 시작!' : '🔍 찾기 시작!';
+  const isHide = next === 'hide';
+  $('hoEmoji').textContent = isHide ? '🎨' : '🔍';
+  if (isParty()) {
+    const who = isHide ? pName(game.hiderQueue[game.subIdx]) : pName(game.seekerIdx);
+    $('hoWho').textContent = `${who} 차례`;
+    const sl = `<span style="color:#94a3b8">라운드 ${game.round}/${game.rounds} · 이번 술래: ${pName(game.seekerIdx)}</span><br>`;
+    $('hoDesc').innerHTML = sl + (isHide
+      ? `기기를 <b>${who}</b>에게 전달하세요. (숨는 사람 ${game.subIdx + 1}/${game.hiderQueue.length})<br>몸을 색칠하고 자세를 잡아 숨으세요! (제한 ${fmtTime(game.hideTime)})<br><b style="color:#fca5a5">다른 사람은 화면을 보면 안 돼요! 🙈</b>`
+      : `기기를 술래 <b>${who}</b>에게 전달하세요.<br>🔫 숨어있는 젤리맨 <b>${game.hiddenList.length}명 전원</b>을 찾아라! (제한 ${fmtTime(SEEK_TIME)})<br><b style="color:#fca5a5">맞히면 탄약 그대로 · 빗나가면 영영 소모!</b><br>💡 진짜는 아주 가끔 숨을 쉬어요…`);
+    $('hoBtn').textContent = isHide ? '🎨 숨기 시작!' : '🔍 사냥 시작!';
+  } else {
+    const team = isHide ? game.hiderTeam : seekerTeam();
+    $('hoWho').textContent = `${teamLabel(team)} 차례`;
+    const scoreLine = `<span style="color:#94a3b8">라운드 ${game.round}/${game.rounds} · 🔴 A ${game.scoreA} : ${game.scoreB} B 🔵</span><br>`;
+    $('hoDesc').innerHTML = scoreLine + (isHide
+      ? `기기를 <b>${team}팀</b>에게 전달하세요.<br>새하얀 젤리맨 몸을 색칠하고 자세를 잡아 벽에 붙으세요! (제한 ${fmtTime(game.hideTime)})<br><b style="color:#fca5a5">${seekerTeam() === 'A' ? 'A' : 'B'}팀(술래)은 화면을 보면 안 돼요! 🙈</b>`
+      : `기기를 <b>${team}팀</b>에게 전달하세요.<br>🔫 샷건으로 진짜 젤리맨을 쏘세요! (제한 ${fmtTime(SEEK_TIME)} · 탄약 ${DIFF[game.difficulty].guesses}발)<br><b style="color:#fca5a5">빗나간 총알은 영영 소모!</b> 탄약이 다 떨어지면 숨는 팀 승리<br>💡 진짜는 아주 가끔 <b>후우~ 하고 숨을 쉬어요</b> (몸이 살짝 부풀었다 꺼짐)`);
+    $('hoBtn').textContent = isHide ? '🎨 숨기 시작!' : '🔍 찾기 시작!';
+  }
   $('hoBtn').onclick = () => { sfx.click(); next === 'hide' ? beginHide() : beginSeek(); };
   show('handoff', true);
 }
 
 function beginHide() {
   show('handoff', false);
-  buildMap();
+  if (!isParty() || game.subIdx === 0) buildMap();   // 파티: 같은 라운드에선 맵 유지
   // 내 젤리맨(새하얀 몸) 생성 — 배치 전까지 플레이어를 따라다님(3인칭)
   game.cham = buildJelly(DIFF[game.difficulty].sizeScale);
   game.cham.group.traverse((o) => { o.userData.chamRole = 'real'; });
   game.chamPlaced = false;
-  game.hidden = null; game.decoys = []; game.decoysLeft = 3;
+  game.hidden = null; game.decoys = []; game.decoysLeft = isParty() ? 1 : 3;
+  if (!isParty() || game.subIdx === 0) game.hiddenList = [];
   game.placing = null; game.paintMode = false;
   game.editCam = false;
   show('walkBtn', false); show('posePanel', false);
@@ -1973,7 +2057,7 @@ function beginHide() {
   game.tool = 'brush'; game.color = pick(PALETTE.slice(3));
   undoStack.length = 0;
   setZoom(70);
-  $('decoyCount').textContent = '3';
+  $('decoyCount').textContent = String(game.decoysLeft);
   $('decoyBtn').disabled = false;
   $('readyBtn').disabled = true;
   $('paintModeBtn').style.opacity = 0.4;   // 붙기 전엔 그리기 불가 표시
@@ -1984,7 +2068,7 @@ function beginHide() {
   updatePaintbarUI();
   game.nearbyColors = [];
   renderSwatches();
-  toast(`${teamLabel(game.hiderTeam)} — 하얀 젤리맨을 색칠해서 위장하세요!`, 2600);
+  toast(`${isParty() ? pName(game.hiderQueue[game.subIdx]) : teamLabel(game.hiderTeam)} — 하얀 젤리맨을 색칠해서 위장하세요!`, 2600);
   setHint('👆 벽/바닥/상자를 탭하면 그 자리에 붙어요');
   setTimeout(() => { if (game.state === 'hide' && !game.paintMode && !game.placing) setHint(''); }, 5000);
 }
@@ -2007,7 +2091,9 @@ function autoPlace() {
 
 function beginSeek() {
   show('handoff', false);
-  game.guesses = DIFF[game.difficulty].guesses;
+  const k = game.hiddenList.length;
+  game.guesses = DIFF[game.difficulty].guesses + (k - 1) * 3;   // 인원만큼 탄약 추가
+  game.catches = 0;
   $('guessPill').textContent = `🔫 ${game.guesses}`;
   game.paintMode = false; game.placing = null;
   game.recoil = 0;
@@ -2016,48 +2102,80 @@ function beginSeek() {
   game.timer = SEEK_TIME;
   game.state = 'seek';
   setPhaseUI();
-  scheduleBlink();
-  setHint('🔫 조준점을 맞추고 발사! 가까울수록 잘 맞아요');
+  const nowP = performance.now();
+  const d = DIFF[game.difficulty];
+  game.hiddenList.forEach((h) => { h.nextBlink = nowP + rand(d.blinkMin, d.blinkMax) * 1000; h.breathUntil = 0; });
+  setHint(k > 1 ? `🔫 젤리맨 ${k}명을 전부 찾아라! 맞히면 탄약 유지` : '🔫 조준점을 맞추고 발사! 가까울수록 잘 맞아요');
   setTimeout(() => setHint(''), 4500);
 }
 
 // ---------------- 라운드 종료 ----------------
 let revealUntil = 0;
-function endRound(found) {
-  restoreEyeOpen();
-  const h = game.hidden;
-  // 노란 링으로 정답 공개 (3D 링)
+function addRevealRing(j) {
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(0.62, 0.78, 40),
     new THREE.MeshBasicMaterial({ color: 0xfde047, side: THREE.DoubleSide, transparent: true, opacity: 0.95 }));
-  ring.position.copy(h.worldPos).addScaledVector(h.normal, 0.14);
-  ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), h.normal);
-  ring.scale.setScalar(h.baseScale);
+  ring.position.copy(j.worldPos).addScaledVector(j.normal, 0.14);
+  ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), j.normal);
+  ring.scale.setScalar(j.baseScale);
   decorGroup.add(ring);
-  // 정답 앞으로 카메라 이동
-  const camPos = h.worldPos.clone().addScaledVector(h.normal, 3.4);
+}
+function endRound(seekerWon) {
+  restoreEyeOpen();
+  const list = game.hiddenList;
+  const k = list.length;
+  // 못 찾은 젤리맨 전원에 노란 링 공개
+  let focus = null;
+  list.forEach((h) => {
+    if (!h.found) { addRevealRing(h.jelly); if (!focus) focus = h.jelly; }
+  });
+  if (!focus) focus = list[k - 1].jelly;
+  const camPos = focus.worldPos.clone().addScaledVector(focus.normal, 3.4);
   camPos.y = clamp(camPos.y, 1.2, 4);
   camera.position.copy(camPos);
-  camera.lookAt(h.worldPos);
+  camera.lookAt(focus.worldPos);
 
-  if (found) { game[seekerTeam() === 'A' ? 'scoreA' : 'scoreB']++; sfx.found(); toast('🎯 찾았다!', 2000); }
-  else { game[game.hiderTeam === 'A' ? 'scoreA' : 'scoreB']++; sfx.survive(); toast('🕴️ 숨기 성공!', 2000); }
+  if (isParty()) {
+    // 생존자 +2점, 술래는 잡은 만큼 + 전원 검거 보너스 +2
+    list.forEach((h) => { if (!h.found) game.scores[h.owner] += 2; });
+    game.scores[game.seekerIdx] += game.catches + (game.catches === k ? 2 : 0);
+    revealFound = game.catches === k;
+    if (revealFound) { sfx.found(); toast('🏆 전원 검거!', 2000); }
+    else { sfx.survive(); toast(`🕴️ ${k - game.catches}명 생존!`, 2000); }
+  } else {
+    revealFound = !!seekerWon;
+    if (seekerWon) { game[seekerTeam() === 'A' ? 'scoreA' : 'scoreB']++; sfx.found(); toast('🎯 찾았다!', 2000); }
+    else { game[game.hiderTeam === 'A' ? 'scoreA' : 'scoreB']++; sfx.survive(); toast('🕴️ 숨기 성공!', 2000); }
+  }
 
   game.state = 'reveal';
   setPhaseUI(); stickHide(); pointers.clear(); stickPtr = null; closeConfirm();
   revealUntil = performance.now() + 2400;
-  revealFound = found;
 }
 let revealFound = false;
 function showResult() {
   game.state = 'result';
   const found = revealFound;
-  $('resBig').textContent = found ? '🎯 찾았다!' : '🕴️ 숨기 성공!';
-  const winner = found ? seekerTeam() : game.hiderTeam;
-  $('resDesc').innerHTML = `라운드 ${game.round}/${game.rounds} — <b>${teamLabel(winner)}</b> 득점!<br>` +
-    (found ? '술래가 젤리맨을 찾아냈어요.' : '젤리맨이 끝까지 들키지 않았어요.');
-  $('resScoreA').textContent = game.scoreA;
-  $('resScoreB').textContent = game.scoreB;
+  const board = document.querySelector('#result .scoreboard');
+  if (isParty()) {
+    const k = game.hiddenList.length;
+    $('resBig').textContent = found ? '🏆 전원 검거!' : `🕴️ ${k - game.catches}명 생존!`;
+    const surv = game.hiddenList.filter((h) => !h.found).map((h) => pName(h.owner)).join(', ');
+    const standing = game.scores.map((v, i) => ({ i, v })).sort((a, b) => b.v - a.v)
+      .map((x) => `${pName(x.i)} ${x.v}점`).join(' · ');
+    $('resDesc').innerHTML = `라운드 ${game.round}/${game.rounds} — 술래 ${pName(game.seekerIdx)}: ${game.catches}/${k} 검거` +
+      (surv ? `<br>생존: ${surv}` : '') +
+      `<br><span style="color:#94a3b8">${standing}</span>`;
+    board.style.display = 'none';
+  } else {
+    $('resBig').textContent = found ? '🎯 찾았다!' : '🕴️ 숨기 성공!';
+    const winner = found ? seekerTeam() : game.hiderTeam;
+    $('resDesc').innerHTML = `라운드 ${game.round}/${game.rounds} — <b>${teamLabel(winner)}</b> 득점!<br>` +
+      (found ? '술래가 젤리맨을 찾아냈어요.' : '젤리맨이 끝까지 들키지 않았어요.');
+    $('resScoreA').textContent = game.scoreA;
+    $('resScoreB').textContent = game.scoreB;
+    board.style.display = '';
+  }
   $('resBtn').textContent = game.round >= game.rounds ? '최종 결과 보기 🏁' : '다음 라운드 ▶';
   show('result', true);
 }
@@ -2066,16 +2184,27 @@ $('resBtn').addEventListener('click', () => {
   show('result', false);
   if (game.round >= game.rounds) { showGameover(); return; }
   game.round++;
-  game.hiderTeam = game.hiderTeam === 'A' ? 'B' : 'A';
+  if (isParty()) setupPartyRound();
+  else game.hiderTeam = game.hiderTeam === 'A' ? 'B' : 'A';
   startHandoff('hide');
 });
 function showGameover() {
   game.state = 'gameover';
-  const a = game.scoreA, b = game.scoreB;
-  $('goBig').textContent = a === b ? '🤝 무승부!' : (a > b ? '🏆 🔴 A팀 승리!' : '🏆 🔵 B팀 승리!');
-  $('goDesc').textContent = a === b ? '숨바꼭질 실력이 막상막하!' : '축하합니다! 한 판 더 어때요?';
-  $('goScoreA').textContent = a;
-  $('goScoreB').textContent = b;
+  const board = document.querySelector('#gameover .scoreboard');
+  if (isParty()) {
+    const order = game.scores.map((v, i) => ({ i, v })).sort((a, b) => b.v - a.v);
+    $('goBig').textContent = `🏆 ${pName(order[0].i)} 우승!`;
+    $('goDesc').innerHTML = order.map((x, r) =>
+      `${['🥇', '🥈', '🥉'][r] || (r + 1) + '위'} ${pName(x.i)} — <b>${x.v}점</b>`).join('<br>');
+    board.style.display = 'none';
+  } else {
+    const a = game.scoreA, b = game.scoreB;
+    $('goBig').textContent = a === b ? '🤝 무승부!' : (a > b ? '🏆 🔴 A팀 승리!' : '🏆 🔵 B팀 승리!');
+    $('goDesc').textContent = a === b ? '숨바꼭질 실력이 막상막하!' : '축하합니다! 한 판 더 어때요?';
+    $('goScoreA').textContent = a;
+    $('goScoreB').textContent = b;
+    board.style.display = '';
+  }
   show('gameover', true);
 }
 $('goBtn').addEventListener('click', () => {
@@ -2089,6 +2218,12 @@ $('goBtn').addEventListener('click', () => {
 $('startBtn').addEventListener('click', () => {
   ac(); sfx.click();
   game.scoreA = 0; game.scoreB = 0; game.round = 1; game.hiderTeam = 'B';
+  game.hiddenList = [];
+  if (isParty()) {
+    game.rounds = game.partyN;   // 전원이 한 번씩 술래
+    game.scores = new Array(game.partyN).fill(0);
+    setupPartyRound();
+  }
   show('menu', false);
   startHandoff('hide');
 });
@@ -2099,7 +2234,7 @@ camera.position.set(0, 10, 26);
 camera.lookAt(0, 1, 0);
 let menuAngle = 0;
 
-window.__dbg = { game, player };   // 디버그/테스트용
+window.__dbg = { game, player, pointers, raycastScreen, camera };   // 디버그/테스트용
 const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
@@ -2186,7 +2321,7 @@ function animate() {
       if (st === 'hide') {
         if (!game.hidden) autoPlace();
         toast('⏰ 시간 종료!', 1500);
-        startHandoff('seek');
+        finalizeHider();
       } else endRound(false);
     }
     // 깜빡임 (찾기 페이즈)
