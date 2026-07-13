@@ -616,8 +616,10 @@ const game = {
   cham: null,              // 이번 라운드의 내 카멜레온(3D 모델)
   chamPlaced: false,
   decoys: [], decoysLeft: 3,
-  placing: null,           // null | 'real' | 'decoy'
+  placing: null,           // null | 'decoy'
   paintMode: false,
+  editCam: false,          // 붙은 뒤 벽 정면 고정 편집 카메라
+  editDist: 2.2, editPanX: 0, editPanY: 0,
   tool: 'brush', brushM: 0.14, color: '#e53e3e',
   recoil: 0,
   nextBlink: 0, blinkUntil: 0, blinking: false,
@@ -767,7 +769,9 @@ function setZoom(fov) {
   camera.updateProjectionMatrix();
 }
 window.addEventListener('wheel', (e) => {
-  if ((game.state === 'hide' && game.paintMode) || game.state === 'seek') {
+  if (game.editCam && game.state === 'hide') {
+    game.editDist = clamp(game.editDist + e.deltaY * 0.003, 0.7, 5);
+  } else if ((game.state === 'hide' && game.paintMode) || game.state === 'seek') {
     setZoom(camera.fov + e.deltaY * 0.02);
   }
 }, { passive: true });
@@ -841,7 +845,8 @@ function placeChameleonAt(hit, isReal) {
     game.chamPlaced = true;
     game.hidden = game.cham;
     $('readyBtn').disabled = false;
-    toast('🕴️ 붙었다! ✋ 팔다리를 잡고 드래그하면 자세 자유 변형!', 2400);
+    toast('🕴️ 붙었다! 바로 몸을 색칠하세요 (🚶 걷기로 나가기)', 2400);
+    if (game.state === 'hide') enterEditCam(true);   // 벽 정면 편집 뷰 + 그리기 ON
   } else {
     // 가짜: 지금까지 칠한 내 모습 + 현재 자세(커스텀 포함)를 그대로 복제
     const decoy = buildJelly(DIFF[game.difficulty].sizeScale, game.cham.surface);
@@ -933,7 +938,7 @@ canvas.addEventListener('pointerdown', (e) => {
     }
   } else {
     // 이동 모드: 왼쪽 하단 = 조이스틱 (손가락 전용, 마우스는 WASD·펜은 시점)
-    if (e.pointerType === 'touch' && e.clientX < window.innerWidth * 0.42 && e.clientY > window.innerHeight * 0.3 && stickPtr === null) {
+    if (e.pointerType === 'touch' && !game.editCam && e.clientX < window.innerWidth * 0.42 && e.clientY > window.innerHeight * 0.3 && stickPtr === null) {
       p.kind = 'stick';
       stickPtr = e.pointerId;
       p.ox = e.clientX; p.oy = e.clientY; p.vx = 0; p.vy = 0;
@@ -975,15 +980,23 @@ canvas.addEventListener('pointermove', (e) => {
   } else if (p.kind === 'look') {
     const looks = [...pointers.values()].filter((q) => q.kind === 'look');
     const f = looks.length > 1 ? 0.5 : 1;
-    player.yaw -= dx * 0.0038 * f;
-    player.pitch = clamp(player.pitch - dy * 0.0032 * f, -1.15, 1.15);
-    // 두 손가락 핀치 = 확대/축소 (그리기 모드·찾기 페이즈)
-    if (looks.length === 2 && (game.paintMode || game.state === 'seek')) {
+    if (game.editCam && game.state === 'hide') {
+      // 편집 뷰: 드래그 = 종이 옮기듯 화면 평행이동
+      const k = game.editDist * 0.0016 * f;
+      game.editPanX = clamp(game.editPanX - dx * k, -3, 3);
+      game.editPanY = clamp(game.editPanY + dy * k, -2.2, 2.2);
+    } else {
+      player.yaw -= dx * 0.0038 * f;
+      player.pitch = clamp(player.pitch - dy * 0.0032 * f, -1.15, 1.15);
+    }
+    // 두 손가락 핀치 = 확대/축소
+    if (looks.length === 2 && (game.paintMode || game.editCam || game.state === 'seek')) {
       const o = looks.find((q) => q !== p);
       if (o) {
         const prevDist = Math.hypot(prevX - o.lx, prevY - o.ly);
         const newDist = Math.hypot(e.clientX - o.lx, e.clientY - o.ly);
-        setZoom(camera.fov + (prevDist - newDist) * 0.12);
+        if (game.editCam) game.editDist = clamp(game.editDist + (newDist - prevDist) * -0.01, 0.7, 5);
+        else setZoom(camera.fov + (prevDist - newDist) * 0.12);
       }
     }
   } else if (p.kind === 'paint') {
@@ -1006,6 +1019,14 @@ function pointerEnd(e) {
   if (!p) return;
   pointers.delete(e.pointerId);
   if (p.kind === 'stick' || e.pointerId === stickPtr) { stickPtr = null; stickHide(); }
+
+  // 붙어있는 내 몸을 탭 → 편집 뷰로 재진입
+  if (game.state === 'hide' && game.chamPlaced && !game.editCam &&
+      (p.kind === 'poseLimb' || p.kind === 'poseRoll') &&
+      p.moved < 12 && performance.now() - p.t0 < 420) {
+    enterEditCam(false);
+    return;
+  }
 
   // 탭 판정
   const isTap = p.moved < 14 && performance.now() - p.t0 < 420 && p.kind === 'look';
@@ -1201,13 +1222,53 @@ function setPaintModeQuiet(on) {
 }
 
 $('paintModeBtn').addEventListener('click', () => { sfx.click(); setPaintMode(!game.paintMode); });
+
+// ---------------- 자세 팔레트 (탭하면 그 자세로) ----------------
+{
+  const panel = $('posePanel');
+  POSES.forEach((ps, i) => {
+    const b = document.createElement('button');
+    b.textContent = ps.name;
+    b.addEventListener('click', () => {
+      if (!game.cham || game.state !== 'hide') return;
+      sfx.click();
+      applyPose(game.cham, i);
+      updatePosePanelUI();
+    });
+    panel.appendChild(b);
+  });
+}
+function updatePosePanelUI() {
+  [...$('posePanel').children].forEach((b, i) => b.classList.toggle('on', !!game.cham && game.cham.pose === i));
+}
 $('poseBtn').addEventListener('click', () => {
   if (!game.cham || game.state !== 'hide') return;
   sfx.click();
-  const next = (game.cham.pose + 1) % POSES.length;
-  applyPose(game.cham, next);
-  toast(`자세: ${POSES[next].name}`, 1100);
+  const open = $('posePanel').classList.contains('hidden');
+  show('posePanel', open);
+  $('poseBtn').classList.toggle('on', open);
+  if (open) updatePosePanelUI();
 });
+
+// ---------------- 편집 카메라 (붙은 뒤 벽 정면 고정 뷰) ----------------
+function enterEditCam(withPaint) {
+  game.editCam = true;
+  game.editDist = 2.2; game.editPanX = 0; game.editPanY = 0;
+  stickHide(); stickPtr = null;
+  show('walkBtn', true);
+  if (withPaint) setPaintMode(true);
+  else setHint('드래그: 화면 이동 · 핀치: 확대 · 팔다리 드래그: 자세 · 벽 탭: 이사');
+}
+function exitEditCam() {
+  game.editCam = false;
+  show('walkBtn', false);
+  show('posePanel', false);
+  $('poseBtn').classList.remove('on');
+  setPaintMode(false);
+  setZoom(70);
+  setHint('');
+}
+$('walkBtn').addEventListener('click', () => { sfx.click(); exitEditCam(); });
 $('decoyBtn').addEventListener('click', () => {
   if (game.decoysLeft <= 0) return;
   sfx.click(); setPlacing(game.placing === 'decoy' ? null : 'decoy');
@@ -1221,6 +1282,9 @@ $('exitBtn').addEventListener('click', () => {
   sfx.click();
   openConfirm('🏠 게임을 끝내고 메뉴로 나갈까요?', window.innerWidth / 2, window.innerHeight / 2, () => {
     game.state = 'menu';
+    game.editCam = false;
+    show('walkBtn', false); show('posePanel', false);
+    $('poseBtn').classList.remove('on');
     setPhaseUI(); stickHide(); pointers.clear(); stickPtr = null;
     setHint(''); setZoom(70);
     show('menu', true);
@@ -1229,6 +1293,9 @@ $('exitBtn').addEventListener('click', () => {
 
 function startHandoff(next) {
   game.state = 'handoff';
+  game.editCam = false;
+  show('walkBtn', false); show('posePanel', false);
+  $('poseBtn').classList.remove('on');
   setPhaseUI(); stickHide(); pointers.clear(); stickPtr = null;
   closeConfirm(); setHint('');
   const team = next === 'hide' ? game.hiderTeam : seekerTeam();
@@ -1251,6 +1318,9 @@ function beginHide() {
   game.chamPlaced = false;
   game.hidden = null; game.decoys = []; game.decoysLeft = 3;
   game.placing = null; game.paintMode = false;
+  game.editCam = false;
+  show('walkBtn', false); show('posePanel', false);
+  $('poseBtn').classList.remove('on');
   game.tool = 'brush'; game.color = pick(PALETTE.slice(3));
   undoStack.length = 0;
   setZoom(70);
@@ -1385,6 +1455,8 @@ function animate() {
   const now = performance.now();
   const st = game.state;
 
+  if (!(st === 'hide' && game.editCam)) camera.up.set(0, 1, 0);   // 편집 뷰 외에는 기본 업벡터
+
   if (st === 'menu' || st === 'handoff' || st === 'result' || st === 'gameover') {
     // 회전 데모 카메라
     menuAngle += dt * 0.1;
@@ -1399,7 +1471,8 @@ function animate() {
     }
     const kv = keyMoveVec();
     if (kv) { mvx += kv.x; mvy += kv.y; }
-    const moving = !!(mvx || mvy);
+    const inEdit = st === 'hide' && game.editCam && game.chamPlaced && game.cham;
+    const moving = !inEdit && !!(mvx || mvy);
     if (moving) {
       const f = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
       const r = new THREE.Vector3(-f.z, 0, f.x);
@@ -1407,7 +1480,18 @@ function animate() {
       player.pos.addScaledVector(r, mvx * player.speed * dt);
       collide();
     }
-    if (st === 'hide' && game.cham && !game.chamPlaced) {
+    if (inEdit) {
+      // 편집 뷰: 벽 정면에 카메라 고정 (팬/줌만)
+      const q = game.cham.qBasis;
+      const xA = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+      const yA = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+      const look = game.cham.worldPos.clone()
+        .addScaledVector(xA, game.editPanX)
+        .addScaledVector(yA, game.editPanY);
+      camera.up.copy(yA);
+      camera.position.copy(look).addScaledVector(game.cham.normal, game.editDist);
+      camera.lookAt(look);
+    } else if (st === 'hide' && game.cham && !game.chamPlaced) {
       // 3인칭: 내 젤리맨이 앞에서 걸어다님
       const m = game.cham.group;
       m.position.set(player.pos.x, moving ? Math.abs(Math.sin(now * 0.012)) * 0.07 : 0, player.pos.z);

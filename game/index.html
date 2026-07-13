@@ -108,6 +108,15 @@
   #colorPicker::-webkit-color-swatch-wrapper { padding:2px; }
   #colorPicker::-webkit-color-swatch { border:none; border-radius:10px; }
 
+  /* ---------- 자세 팔레트 ---------- */
+  #posePanel { position:absolute; left:50%; transform:translateX(-50%); bottom:calc(140px + env(safe-area-inset-bottom));
+    display:flex; gap:8px; background:rgba(8,12,24,.92); border-radius:18px; padding:10px 12px;
+    pointer-events:auto; flex-wrap:wrap; justify-content:center; max-width:92vw; backdrop-filter:blur(8px);
+    border:1.5px solid rgba(255,255,255,.14); }
+  #posePanel button { border:none; border-radius:12px; padding:11px 15px; font-size:16.5px; font-weight:800;
+    background:rgba(255,255,255,.1); color:#fff; cursor:pointer; }
+  #posePanel button.on { background:#16a34a; }
+
   /* ---------- 조이스틱 ---------- */
   #stickBase { position:absolute; width:130px; height:130px; border-radius:50%; background:rgba(255,255,255,.09);
     border:2px solid rgba(255,255,255,.22); display:none; pointer-events:none; }
@@ -229,7 +238,9 @@
     <button class="act" id="paintModeBtn"><span class="ico">🎨</span>그리기</button>
     <button class="act" id="poseBtn"><span class="ico">🤸</span>자세</button>
     <button class="act" id="decoyBtn"><span class="ico">🃏</span>가짜 <span id="decoyCount">3</span></button>
+    <button class="act hidden" id="walkBtn"><span class="ico">🚶</span>걷기</button>
   </div>
+  <div id="posePanel" class="hidden"></div>
   <button class="btn small hidden" id="readyBtn" disabled>✅ 다 숨었어요!</button>
 
   <div id="paintbar" class="hidden">
