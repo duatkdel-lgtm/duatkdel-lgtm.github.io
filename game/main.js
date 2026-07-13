@@ -21,7 +21,7 @@ function srng() {
 const newSeed = () => (Math.random() * 4294967296) >>> 0;
 const rand = (a, b) => a + srng() * (b - a);
 const randi = (a, b) => Math.floor(rand(a, b + 1));
-const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+const pick = (arr) => arr[Math.floor(srng() * arr.length)];   // 시드 스트림 사용 — 온라인 맵 동기화
 
 // ---------------- 기기 감지 (iPad + PC 모두 지원) ----------------
 const isTouchDevice = navigator.maxTouchPoints > 0;
@@ -81,6 +81,8 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8ecbee);
@@ -94,6 +96,13 @@ const ambLight = new THREE.AmbientLight(0xffffff, 0.42);
 scene.add(ambLight);
 const sun = new THREE.DirectionalLight(0xfff2d6, 0.95);
 sun.position.set(25, 40, 12);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -30; sun.shadow.camera.right = 30;
+sun.shadow.camera.top = 30; sun.shadow.camera.bottom = -30;
+sun.shadow.camera.near = 5; sun.shadow.camera.far = 110;
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.03;
 scene.add(sun);
 
 window.addEventListener('resize', () => {
@@ -111,6 +120,7 @@ let paintMeshes = [];           // 레이캐스트 대상(칠할 수 있는 면)
 let solidMeshes = [];           // 시야 차단 포함 전체(레이캐스트 오클루전)
 let colliders = [];             // {x1,z1,x2,z2}
 let decorGroup = null;          // 라운드마다 폐기할 그룹
+let mapAnims = [];              // 맵 장식 애니메이션 (회전목마·관람차·풍선 등)
 
 class PaintSurface {
   constructor(wPx, hPx) {
@@ -187,7 +197,7 @@ function speckle(ctx, x, y, w, h, colors, count, rMin, rMax, alpha = 1) {
   for (let i = 0; i < count; i++) {
     ctx.fillStyle = pick(colors);
     ctx.beginPath();
-    ctx.arc(x + Math.random() * w, y + Math.random() * h, rand(rMin, rMax), 0, 7);
+    ctx.arc(x + srng() * w, y + srng() * h, rand(rMin, rMax), 0, 7);
     ctx.fill();
   }
   ctx.restore();
@@ -269,9 +279,47 @@ function clearMap() {
     });
   }
   paintSurfaces.forEach((s) => s.dispose());
-  paintSurfaces = []; paintMeshes = []; solidMeshes = []; colliders = [];
+  paintSurfaces = []; paintMeshes = []; solidMeshes = []; colliders = []; mapAnims = [];
   decorGroup = new THREE.Group();
   scene.add(decorGroup);
+}
+
+// 야외 맵 공용: 그라데이션 하늘 돔 + 뭉게구름
+function addOutdoorSky(topCol, horizonCol, cloudCol = '#ffffff') {
+  const cv = document.createElement('canvas');
+  cv.width = 64; cv.height = 256;
+  const c2 = cv.getContext('2d');
+  const g = c2.createLinearGradient(0, 0, 0, 256);
+  g.addColorStop(0, topCol); g.addColorStop(0.62, horizonCol); g.addColorStop(1, horizonCol);
+  c2.fillStyle = g; c2.fillRect(0, 0, 64, 256);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const dome = new THREE.Mesh(
+    new THREE.SphereGeometry(95, 24, 14),
+    new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, fog: false, depthWrite: false }));
+  dome.userData.noShadow = true;
+  decorGroup.add(dome);
+  const cloudMat = new THREE.MeshLambertMaterial({ color: cloudCol, emissive: 0x9aa7b8, emissiveIntensity: 0.35 });
+  for (let i = 0; i < 8; i++) {
+    const cl = new THREE.Group();
+    const n = randi(3, 5);
+    for (let j = 0; j < n; j++) {
+      const puff = new THREE.Mesh(new THREE.SphereGeometry(rand(1.4, 2.6), 10, 8), cloudMat);
+      puff.position.set(rand(-3, 3), rand(-0.5, 0.7), rand(-1.2, 1.2));
+      puff.scale.y = 0.55;
+      puff.userData.noShadow = true;
+      cl.add(puff);
+    }
+    const ang = rand(0, Math.PI * 2), r = rand(26, 52);
+    cl.position.set(Math.cos(ang) * r, rand(20, 32), Math.sin(ang) * r);
+    decorGroup.add(cl);
+    const speed = rand(0.15, 0.4), y0 = cl.position.y;
+    mapAnims.push((dt, t) => {
+      cl.position.x += speed * dt;
+      if (cl.position.x > 60) cl.position.x = -60;
+      cl.position.y = y0 + Math.sin(t * 0.0003 + ang) * 0.4;
+    });
+  }
 }
 
 function addTree(x, z) {
@@ -343,10 +391,10 @@ function buildingPainter(style) {
             drawWindow(ctx, x0 + fw * 0.12, groundY - 2.3 * ppmY, 1.1 * ppmX, 1.1 * ppmY);
             drawWindow(ctx, x0 + fw * 0.88 - 1.1 * ppmX, groundY - 2.3 * ppmY, 1.1 * ppmX, 1.1 * ppmY);
           }
-        } else if (Math.random() < 0.8) {
+        } else if (srng() < 0.8) {
           const n = faceW > 6 ? 2 : 1;
           for (let i = 0; i < n; i++) {
-            if (Math.random() < 0.45) drawPoster(ctx, x0 + fw * rand(0.1, 0.55), groundY - rand(2.0, 2.6) * ppmY, rand(0.8, 1.2) * ppmX, rand(1.1, 1.5) * ppmY);
+            if (srng() < 0.45) drawPoster(ctx, x0 + fw * rand(0.1, 0.55), groundY - rand(2.0, 2.6) * ppmY, rand(0.8, 1.2) * ppmX, rand(1.1, 1.5) * ppmY);
             else drawWindow(ctx, x0 + fw * rand(0.15, 0.6), groundY - 2.3 * ppmY, 1.1 * ppmX, 1.1 * ppmY);
           }
         }
@@ -378,7 +426,17 @@ function buildMap() {
   seedRng(game.mapSeed);
   clearMap();
   if (game.map === 'gym') buildGymMap();
+  else if (game.map === 'park') buildParkMap();
   else buildTownMap();
+  // 야외 맵은 실시간 그림자 (실내 헬스장은 천장이 태양광을 막으므로 끔)
+  const outdoor = game.map !== 'gym';
+  sun.castShadow = outdoor;
+  decorGroup.traverse((o) => {
+    if (o.isMesh && !o.userData.noShadow) {
+      o.castShadow = outdoor && !(o.material && o.material.transparent);
+      o.receiveShadow = outdoor;
+    }
+  });
 }
 
 function buildTownMap() {
@@ -387,6 +445,7 @@ function buildTownMap() {
   scene.background.set(0x8ecbee);
   scene.fog.color.set(0x8ecbee); scene.fog.near = 55; scene.fog.far = 120;
   hemiLight.intensity = 1.15; ambLight.intensity = 0.42; sun.intensity = 0.95;
+  addOutdoorSky('#3f8fd4', '#bfe3f7');
   // ---- 바닥 ----
   const groundSize = ARENA * 2;
   const gSurf = new PaintSurface(1024, 1024);
@@ -1034,6 +1093,586 @@ function buildGymMap() {
   );
 }
 
+// ============================================================
+//  🎡 젤리랜드 놀이공원 맵 — 원작 감성의 고퀄 파스텔 테마파크
+//  회전목마·대관람차(실시간 구동), 간식 노점, 선물상자, 오리 연못
+// ============================================================
+const PARK = 24;
+
+// 줄무늬 캔버스 텍스처 (기둥/차양/지붕용)
+function stripesTex(a, b, n = 8, horizontal = false) {
+  const cv = document.createElement('canvas');
+  cv.width = 256; cv.height = 256;
+  const c2 = cv.getContext('2d');
+  const s = 256 / n;
+  for (let i = 0; i < n; i++) {
+    c2.fillStyle = i % 2 ? b : a;
+    if (horizontal) c2.fillRect(0, i * s, 256, s);
+    else c2.fillRect(i * s, 0, s, 256);
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// 회전목마: 크림 단상 + 줄무늬 기둥·지붕 + 파스텔 목마 6기 (실제로 돌아감)
+function makeCarousel(cx, cz) {
+  const g = new THREE.Group();
+  g.position.set(cx, 0, cz);
+  const cream = new THREE.MeshLambertMaterial({ color: 0xf7ecd8 });
+  const gold = new THREE.MeshLambertMaterial({ color: 0xd9a728 });
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 3.6, 0.42, 24), cream);
+  base.position.y = 0.21;
+  const trim = new THREE.Mesh(new THREE.TorusGeometry(3.42, 0.07, 8, 28), gold);
+  trim.rotation.x = Math.PI / 2; trim.position.y = 0.44;
+  const col = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.52, 0.52, 3.0, 14),
+    new THREE.MeshLambertMaterial({ map: stripesTex('#e84d6f', '#fdf6ec', 10) }));
+  col.position.y = 1.9;
+  const roof = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.14, 4.0, 1.5, 18),
+    new THREE.MeshLambertMaterial({ map: stripesTex('#e84d6f', '#fdf6ec', 18) }));
+  roof.position.y = 4.15;
+  const roofTrim = new THREE.Mesh(new THREE.TorusGeometry(3.95, 0.09, 8, 30), gold);
+  roofTrim.rotation.x = Math.PI / 2; roofTrim.position.y = 3.42;
+  const finial = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8), gold);
+  finial.position.y = 5.0;
+  g.add(base, trim, col, roof, roofTrim, finial);
+  // 지붕 밑 전구
+  for (let i = 0; i < 10; i++) {
+    const a = i / 10 * Math.PI * 2;
+    const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 6),
+      new THREE.MeshBasicMaterial({ color: 0xffd77a }));
+    bulb.position.set(Math.cos(a) * 3.75, 3.35, Math.sin(a) * 3.75);
+    bulb.userData.noShadow = true;
+    g.add(bulb);
+  }
+  // 돌아가는 부분: 목마 6기 + 봉
+  const spin = new THREE.Group();
+  spin.position.y = 0.42;
+  const horses = [];
+  const horseCols = [0xf9a8d4, 0x93c5fd, 0xfcd34d, 0xa7f3d0, 0xd8b4fe, 0xfda4af];
+  for (let i = 0; i < 6; i++) {
+    const a = i / 6 * Math.PI * 2;
+    const hx = Math.cos(a) * 2.35, hz = Math.sin(a) * 2.35;
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 2.9, 8), gold);
+    pole.position.set(hx, 1.45, hz);
+    spin.add(pole);
+    const horse = new THREE.Group();
+    const mat = new THREE.MeshLambertMaterial({ color: horseCols[i] });
+    const body = new THREE.Mesh(new THREE.SphereGeometry(0.34, 12, 10), mat);
+    body.scale.set(1.5, 0.95, 0.78);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 10, 8), mat);
+    head.position.set(0.5, 0.33, 0);
+    const snout = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.12, 0.13), mat);
+    snout.position.set(0.66, 0.28, 0);
+    const mane = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.26, 0.05),
+      new THREE.MeshLambertMaterial({ color: 0xffffff }));
+    mane.position.set(0.36, 0.42, 0);
+    horse.add(body, head, snout, mane);
+    [[0.28, 0.16], [0.28, -0.16], [-0.28, 0.16], [-0.28, -0.16]].forEach(([lx, lz]) => {
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.38, 6), mat);
+      leg.position.set(lx, -0.42, lz);
+      horse.add(leg);
+    });
+    horse.position.set(hx, 1.0, hz);
+    horse.rotation.y = -a + Math.PI / 2;   // 진행 방향을 바라봄
+    horses.push({ horse, phase: a * 2 });
+    spin.add(horse);
+  }
+  g.add(spin);
+  decorGroup.add(g);
+  g.traverse((o) => { if (o.isMesh) solidMeshes.push(o); });
+  mapAnims.push((dt, t) => {
+    spin.rotation.y += dt * 0.4;
+    horses.forEach(({ horse, phase }) => { horse.position.y = 1.0 + Math.sin(t * 0.002 + phase) * 0.16; });
+  });
+  colliders.push({ x1: cx - 3.7, z1: cz - 3.7, x2: cx + 3.7, z2: cz + 3.7 });
+}
+
+// 대관람차: A프레임 다리 + 스포크 휠 + 파스텔 곤돌라 8기 (천천히 돌고 곤돌라는 수평 유지)
+function makeFerrisWheel(cx, cz, yaw) {
+  const g = new THREE.Group();
+  g.position.set(cx, 0, cz);
+  g.rotation.y = yaw;
+  const steel = new THREE.MeshLambertMaterial({ color: 0xe8ecf2 });
+  const red = new THREE.MeshLambertMaterial({ color: 0xe84d6f });
+  const HUB = 7.6, R = 6.0;
+  // A프레임 다리 (양쪽)
+  [-1.1, 1.1].forEach((oz) => {
+    [-1, 1].forEach((sx) => {
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.17, HUB + 0.6, 8), red);
+      leg.position.set(sx * 1.9, HUB / 2, oz);
+      leg.rotation.z = sx * 0.245;
+      g.add(leg);
+    });
+  });
+  const axle = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 2.6, 10), steel);
+  axle.rotation.x = Math.PI / 2; axle.position.y = HUB;
+  g.add(axle);
+  // 휠 (XY 평면에서 Z축 회전)
+  const wheel = new THREE.Group();
+  wheel.position.y = HUB;
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(R, 0.13, 8, 40), steel);
+  const rim2 = new THREE.Mesh(new THREE.TorusGeometry(R * 0.55, 0.08, 8, 32), steel);
+  wheel.add(rim, rim2);
+  for (let i = 0; i < 8; i++) {
+    const a = i / 8 * Math.PI;
+    const spoke = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, R * 2, 6), steel);
+    spoke.rotation.z = a + Math.PI / 2;
+    wheel.add(spoke);
+  }
+  // 림 전구 (알록달록)
+  const bulbCols = [0xff5f8f, 0xffd166, 0x6ee7b7, 0x7dd3fc, 0xc4b5fd];
+  for (let i = 0; i < 20; i++) {
+    const a = i / 20 * Math.PI * 2;
+    const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 6),
+      new THREE.MeshBasicMaterial({ color: bulbCols[i % bulbCols.length] }));
+    bulb.position.set(Math.cos(a) * R, Math.sin(a) * R, 0);
+    bulb.userData.noShadow = true;
+    wheel.add(bulb);
+  }
+  // 곤돌라 8기 — 피벗을 역회전시켜 항상 수평 유지
+  const pivots = [];
+  const gonCols = [0xf9a8d4, 0xfcd34d, 0x93c5fd, 0xa7f3d0, 0xfda4af, 0xd8b4fe, 0xfdba74, 0x99f6e4];
+  for (let i = 0; i < 8; i++) {
+    const a = i / 8 * Math.PI * 2;
+    const pivot = new THREE.Group();
+    pivot.position.set(Math.cos(a) * R, Math.sin(a) * R, 0);
+    const hanger = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.5, 6), steel);
+    hanger.position.y = -0.25;
+    const cab = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.75, 0.8),
+      new THREE.MeshLambertMaterial({ color: gonCols[i] }));
+    cab.position.y = -0.85;
+    const cabRoof = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.1, 0.9),
+      new THREE.MeshLambertMaterial({ color: 0xffffff }));
+    cabRoof.position.y = -0.45;
+    pivot.add(hanger, cab, cabRoof);
+    pivots.push(pivot);
+    wheel.add(pivot);
+  }
+  g.add(wheel);
+  decorGroup.add(g);
+  g.traverse((o) => { if (o.isMesh) solidMeshes.push(o); });
+  mapAnims.push((dt) => {
+    wheel.rotation.z += dt * 0.13;
+    pivots.forEach((p) => { p.rotation.z = -wheel.rotation.z; });
+  });
+  colliders.push({ x1: cx - 3.2, z1: cz - 3.2, x2: cx + 3.2, z2: cz + 3.2 });
+}
+
+// 간식 노점: 칠할 수 있는 몸체 + 줄무늬 피라미드 차양 + 간판
+function makeSnackStall(cx, cz, name, c1, c2) {
+  makePaintBox(cx, cz, 2.4, 1.8, 1.55, 64, {
+    top: false,
+    paint(surf, info) {
+      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
+      ctx.fillStyle = '#fdf6ec'; ctx.fillRect(0, 0, W, H);
+      speckle(ctx, 0, 0, W, H, ['#f5ecdd', '#fffdf6'], 300, 1, 3, 0.5);
+      // 하단 줄무늬 스커트
+      const skirtY = H * 0.55;
+      for (let x = 0; x < W; x += 40) {
+        ctx.fillStyle = (x / 40) % 2 ? '#fdf6ec' : c1;
+        ctx.fillRect(x, skirtY, 40, H - skirtY);
+      }
+      ctx.fillStyle = 'rgba(0,0,0,.14)'; ctx.fillRect(0, skirtY - 4, W, 6);
+      // 정면: 메뉴판 + 간판 글씨
+      info.faces.forEach(([u0, u1], idx) => {
+        if (idx !== 0) return;
+        const x0 = u0 * W, fw = (u1 - u0) * W;
+        ctx.fillStyle = '#3d3128';
+        ctx.fillRect(x0 + fw * 0.12, H * 0.12, fw * 0.34, H * 0.32);
+        ctx.fillStyle = '#ffe9b8';
+        ctx.font = `bold ${Math.floor(H * 0.09)}px sans-serif`;
+        ctx.fillText('MENU', x0 + fw * 0.16, H * 0.24);
+        ctx.fillStyle = 'rgba(255,233,184,.7)';
+        for (let i = 0; i < 3; i++) ctx.fillRect(x0 + fw * 0.16, H * (0.28 + i * 0.05), fw * 0.24, 4);
+        ctx.fillStyle = c2;
+        ctx.font = `bold ${Math.floor(H * 0.16)}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText(name, x0 + fw * 0.7, H * 0.32);
+        ctx.textAlign = 'left';
+      });
+    },
+  });
+  // 차양 기둥 4개 + 줄무늬 피라미드 지붕
+  const poleMat = new THREE.MeshLambertMaterial({ color: 0x8a6a4a });
+  [[-1.1, -0.8], [1.1, -0.8], [-1.1, 0.8], [1.1, 0.8]].forEach(([ox, oz]) => {
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 2.25, 6), poleMat);
+    pole.position.set(cx + ox, 1.12, cz + oz);
+    decorGroup.add(pole); solidMeshes.push(pole);
+  });
+  const canopy = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.08, 2.0, 0.85, 4),
+    new THREE.MeshLambertMaterial({ map: stripesTex(c1, '#fdf6ec', 8) }));
+  canopy.position.set(cx, 2.6, cz);
+  canopy.rotation.y = Math.PI / 4;
+  decorGroup.add(canopy); solidMeshes.push(canopy);
+}
+
+// 선물상자 (칠할 수 있음): 포장지 + 리본 + 뚜껑 보우
+function giftPainter(base, ribbon) {
+  return {
+    top: true,
+    paint(surf, info) {
+      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
+      ctx.fillStyle = base; ctx.fillRect(0, 0, W, H);
+      speckle(ctx, 0, 0, W, H, ['rgba(255,255,255,.25)'], 140, 2, 5, 0.6);
+      const wallH = info.wallH;   // 캔버스 위쪽 = 벽면 밴드, 아래쪽 = 윗면
+      // 각 면 세로 리본
+      info.faces.forEach(([u0, u1]) => {
+        const x0 = u0 * W, fw = (u1 - u0) * W;
+        ctx.fillStyle = ribbon;
+        ctx.fillRect(x0 + fw / 2 - fw * 0.09, 0, fw * 0.18, wallH);
+      });
+      // 윗면 십자 리본 + 보우
+      const topH = H - wallH, topY0 = wallH;
+      if (topH > 8) {
+        const tw = info.faces[0][1] * W;   // 윗면 u 폭 = 첫 면 폭
+        ctx.fillStyle = ribbon;
+        ctx.fillRect(tw / 2 - tw * 0.09, topY0, tw * 0.18, topH);
+        ctx.fillRect(0, topY0 + topH / 2 - topH * 0.09, tw, topH * 0.18);
+        ctx.beginPath(); ctx.arc(tw / 2, topY0 + topH / 2, Math.min(tw, topH) * 0.14, 0, 7); ctx.fill();
+      }
+    },
+  };
+}
+
+// 장난감 블록 (칠할 수 있음): 파스텔 면 + 알파벳
+function blockPainter(letter, bg, fg) {
+  return {
+    top: true,
+    paint(surf, info) {
+      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+      const wallH = info.wallH;   // 벽면 밴드는 캔버스 위쪽(y 0..wallH)
+      info.faces.forEach(([u0, u1]) => {
+        const x0 = u0 * W, fw = (u1 - u0) * W;
+        ctx.strokeStyle = fg; ctx.lineWidth = 5;
+        ctx.strokeRect(x0 + fw * 0.12, wallH * 0.12, fw * 0.76, wallH * 0.76);
+        ctx.fillStyle = fg;
+        ctx.font = `bold ${Math.floor(wallH * 0.5)}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(letter, x0 + fw / 2, wallH * 0.52);
+      });
+      ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    },
+  };
+}
+
+// 대형 롤리팝: 흰 막대 + 나선 무늬 원판
+function makeLollipop(x, z, col) {
+  const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.7, 8),
+    new THREE.MeshLambertMaterial({ color: 0xfdf6ec }));
+  stick.position.set(x, 0.85, z);
+  const cv = document.createElement('canvas');
+  cv.width = 128; cv.height = 128;
+  const c2 = cv.getContext('2d');
+  c2.fillStyle = '#fdf6ec'; c2.fillRect(0, 0, 128, 128);
+  c2.strokeStyle = col; c2.lineWidth = 11; c2.beginPath();
+  for (let a = 0; a < Math.PI * 8; a += 0.08) {
+    const r = a / (Math.PI * 8) * 60;
+    const px = 64 + Math.cos(a) * r, py = 64 + Math.sin(a) * r;
+    if (a === 0) c2.moveTo(px, py); else c2.lineTo(px, py);
+  }
+  c2.stroke();
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const head = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.14, 20),
+    [new THREE.MeshLambertMaterial({ color: col }),
+     new THREE.MeshLambertMaterial({ map: tex }),
+     new THREE.MeshLambertMaterial({ map: tex })]);
+  head.position.set(x, 2.1, z);
+  head.rotation.x = Math.PI / 2;
+  head.rotation.y = rand(0, Math.PI);
+  decorGroup.add(stick, head);
+  solidMeshes.push(stick, head);
+  colliders.push({ x1: x - 0.2, z1: z - 0.2, x2: x + 0.2, z2: z + 0.2 });
+}
+
+// 풍선 수레: 나무 수레 + 둥실거리는 파스텔 풍선 다발
+function makeBalloonCart(x, z) {
+  const cart = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.6, 0.6),
+    new THREE.MeshLambertMaterial({ color: 0xa5744a }));
+  cart.position.set(x, 0.45, z);
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.6, 6),
+    new THREE.MeshLambertMaterial({ color: 0x6b4a2b }));
+  pole.position.set(x, 1.4, z);
+  decorGroup.add(cart, pole);
+  solidMeshes.push(cart, pole);
+  const cluster = new THREE.Group();
+  cluster.position.set(x, 2.35, z);
+  const cols = [0xff5f8f, 0xffd166, 0x6ee7b7, 0x7dd3fc, 0xc4b5fd, 0xfda4af];
+  for (let i = 0; i < 6; i++) {
+    const b = new THREE.Mesh(new THREE.SphereGeometry(0.21, 10, 8),
+      new THREE.MeshLambertMaterial({ color: cols[i] }));
+    const a = i / 6 * Math.PI * 2;
+    b.position.set(Math.cos(a) * 0.26, (i % 2) * 0.24, Math.sin(a) * 0.26);
+    b.scale.y = 1.15;
+    cluster.add(b);
+  }
+  decorGroup.add(cluster);
+  cluster.traverse((o) => { if (o.isMesh) solidMeshes.push(o); });
+  const y0 = cluster.position.y, ph = rand(0, 6);
+  mapAnims.push((dt, t) => {
+    cluster.position.y = y0 + Math.sin(t * 0.0012 + ph) * 0.09;
+    cluster.rotation.y += dt * 0.3;
+  });
+  colliders.push({ x1: x - 0.5, z1: z - 0.4, x2: x + 0.5, z2: z + 0.4 });
+}
+
+// 연못의 대왕 러버덕
+function makeDuck(x, z) {
+  const yellow = new THREE.MeshLambertMaterial({ color: 0xfcd34d });
+  const duck = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.85, 14, 12), yellow);
+  body.scale.set(1.25, 0.85, 1);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.48, 12, 10), yellow);
+  head.position.set(0.62, 0.85, 0);
+  const beak = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.13, 0.22),
+    new THREE.MeshLambertMaterial({ color: 0xf97316 }));
+  beak.position.set(1.06, 0.8, 0);
+  [-0.17, 0.17].forEach((oz) => {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.055, 6, 6),
+      new THREE.MeshLambertMaterial({ color: 0x26282e }));
+    eye.position.set(0.92, 1.0, oz);
+    duck.add(eye);
+  });
+  duck.add(body, head, beak);
+  duck.position.set(x, 0.55, z);
+  duck.rotation.y = rand(0, Math.PI * 2);
+  decorGroup.add(duck);
+  duck.traverse((o) => { if (o.isMesh) solidMeshes.push(o); });
+  mapAnims.push((dt, t) => {
+    duck.position.y = 0.55 + Math.sin(t * 0.0015) * 0.05;
+    duck.rotation.z = Math.sin(t * 0.001) * 0.05;
+  });
+  colliders.push({ x1: x - 1.1, z1: z - 1.0, x2: x + 1.3, z2: z + 1.0 });
+}
+
+// 솜사탕 나무 (파스텔 잎)
+function makeCandyTree(x, z) {
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.24, 1.5, 7),
+    new THREE.MeshLambertMaterial({ color: 0x9a7150 }));
+  trunk.position.set(x, 0.75, z);
+  decorGroup.add(trunk); solidMeshes.push(trunk);
+  const col = pick([0xf9a8d4, 0xa7f3d0, 0xc4b5fd, 0xfcd34d, 0x99f6e4]);
+  const mat = new THREE.MeshLambertMaterial({ color: col });
+  [[0, 2.15, 0, 1.05], [0.55, 1.75, 0.3, 0.6], [-0.5, 1.8, -0.25, 0.55]].forEach(([ox, oy, oz, r]) => {
+    const puff = new THREE.Mesh(new THREE.SphereGeometry(r, 10, 8), mat);
+    puff.position.set(x + ox, oy, z + oz);
+    decorGroup.add(puff); solidMeshes.push(puff);
+  });
+  colliders.push({ x1: x - 0.32, z1: z - 0.32, x2: x + 0.32, z2: z + 0.32 });
+}
+
+// 가로등 (따뜻한 전구 + 페넌트 깃발)
+function makeParkLamp(x, z) {
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, 3.0, 8),
+    new THREE.MeshLambertMaterial({ color: 0x2f4b3a }));
+  pole.position.set(x, 1.5, z);
+  const glow = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffe9b0 }));
+  glow.position.set(x, 3.1, z);
+  glow.userData.noShadow = true;
+  const flag = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.26, 0.02),
+    new THREE.MeshLambertMaterial({ color: pick([0xe84d6f, 0x38bdf8, 0xfcd34d]) }));
+  flag.position.set(x + 0.24, 2.75, z);
+  decorGroup.add(pole, glow, flag);
+  solidMeshes.push(pole);
+  colliders.push({ x1: x - 0.14, z1: z - 0.14, x2: x + 0.14, z2: z + 0.14 });
+}
+
+function buildParkMap() {
+  ARENA_X = PARK; ARENA_Z = PARK;
+  SPAWN = { x: 0, z: 22.3, yaw: 0 };
+  scene.background.set(0x9fd8f0);
+  scene.fog.color.set(0x9fd8f0); scene.fog.near = 55; scene.fog.far = 130;
+  hemiLight.intensity = 1.2; ambLight.intensity = 0.45; sun.intensity = 1.0;
+  addOutdoorSky('#41a3e8', '#dff2ff');
+
+  // ---- 바닥: 잔디 + 캔디 스트라이프 광장 + 산책로 + 연못 ----
+  const S = PARK * 2;
+  const gSurf = new PaintSurface(1024, 1024);
+  {
+    const ctx = gSurf.ctx, W = 1024;
+    const px = (wx) => (wx + PARK) / S * W;
+    ctx.fillStyle = '#6cbf4f'; ctx.fillRect(0, 0, W, W);
+    speckle(ctx, 0, 0, W, W, ['#61b345', '#78ca5c', '#84d168', '#57a83e'], 2800, 2, 6, 0.8);
+    // 산책로 링 (플라자 순환로)
+    ctx.strokeStyle = '#e9cf9a'; ctx.lineWidth = 52;
+    ctx.beginPath(); ctx.arc(W / 2, W / 2, W * 0.27, 0, 7); ctx.stroke();
+    // 입구 → 플라자 길 + 어트랙션 스포크
+    ctx.lineWidth = 46; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(W / 2, W); ctx.lineTo(W / 2, W / 2); ctx.stroke();
+    [[px(-9), px(-7)], [px(15), px(-14)], [px(-15), px(12)]].forEach(([tx, ty]) => {
+      ctx.beginPath(); ctx.moveTo(W / 2, W / 2); ctx.lineTo(tx, ty); ctx.stroke();
+    });
+    ctx.lineCap = 'butt';
+    speckle(ctx, 0, 0, W, W, ['#dfc48c', '#f2dcab'], 900, 1, 3, 0.35);
+    // 중앙 광장: 캔디 방사 스트라이프 + 골드 링
+    const R0 = W * 0.155;
+    for (let i = 0; i < 16; i++) {
+      ctx.fillStyle = i % 2 ? '#fdf1f6' : '#f8b8ce';
+      ctx.beginPath(); ctx.moveTo(W / 2, W / 2);
+      ctx.arc(W / 2, W / 2, R0, i / 16 * Math.PI * 2, (i + 1) / 16 * Math.PI * 2);
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.strokeStyle = '#d9a728'; ctx.lineWidth = 8;
+    ctx.beginPath(); ctx.arc(W / 2, W / 2, R0, 0, 7); ctx.stroke();
+    ctx.fillStyle = '#e84d6f';
+    ctx.beginPath(); ctx.arc(W / 2, W / 2, 14, 0, 7); ctx.fill();
+    // 오리 연못 (모래 테두리 + 물결)
+    const pond = [px(-15), px(12)];
+    ctx.fillStyle = '#e8d9a8';
+    ctx.beginPath(); ctx.ellipse(pond[0], pond[1], 105, 82, 0.3, 0, 7); ctx.fill();
+    ctx.fillStyle = '#54b3e6';
+    ctx.beginPath(); ctx.ellipse(pond[0], pond[1], 88, 66, 0.3, 0, 7); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.5)'; ctx.lineWidth = 3;
+    for (let i = 0; i < 4; i++) {
+      ctx.beginPath();
+      ctx.ellipse(pond[0], pond[1], 20 + i * 17, 14 + i * 13, 0.3, 0, 7);
+      ctx.stroke();
+    }
+    // 꽃밭 스펙클
+    speckle(ctx, 0, 0, W, W, ['#f6e05e', '#f687b3', '#fff', '#fc8181', '#c4b5fd'], 240, 2, 5, 0.95);
+  }
+  gSurf.addPlane(S, S, 0, 0, 1, 1, new THREE.Vector3(0, 0, 0), 0, -Math.PI / 2);
+  gSurf.snapshotBase(); gSurf.texture.needsUpdate = true;
+
+  // ---- 외곽 벽: 파스텔 줄무늬 펜스 + 페넌트 벽화 ----
+  const wallH = 3.4;
+  const mkParkWall = (len) => {
+    const s = new PaintSurface(2048, Math.ceil(2048 / len * wallH));
+    const ctx = s.ctx, W = s.canvas.width, H = s.canvas.height;
+    const stripes = ['#fbd6e3', '#fdf6ec', '#cfe9fb', '#fdf6ec', '#d9f3e2', '#fdf6ec'];
+    const sw = W / 36;
+    for (let i = 0; i < 36; i++) { ctx.fillStyle = stripes[i % 6]; ctx.fillRect(i * sw, 0, sw + 1, H); }
+    speckle(ctx, 0, 0, W, H, ['rgba(255,255,255,.35)'], 400, 1, 3, 0.5);
+    // 상단 페넌트 깃발 벽화
+    const cols = ['#e84d6f', '#f5a623', '#38bdf8', '#34d399', '#a78bfa'];
+    for (let x = 0; x < W; x += 55) {
+      ctx.fillStyle = cols[(x / 55) % 5 | 0];
+      ctx.beginPath(); ctx.moveTo(x, 8); ctx.lineTo(x + 44, 8); ctx.lineTo(x + 22, 46); ctx.closePath(); ctx.fill();
+    }
+    ctx.strokeStyle = 'rgba(90,60,20,.5)'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(0, 10); ctx.lineTo(W, 10); ctx.stroke();
+    // 하단 몰딩
+    ctx.fillStyle = 'rgba(0,0,0,.1)'; ctx.fillRect(0, H - 14, W, 14);
+    // 풍선 그림 몇 개
+    for (let i = 0; i < 6; i++) {
+      const bx = rand(0.05, 0.95) * W, by = rand(0.4, 0.7) * H;
+      ctx.fillStyle = pick(cols);
+      ctx.beginPath(); ctx.ellipse(bx, by, 16, 20, 0, 0, 7); ctx.fill();
+      ctx.strokeStyle = 'rgba(90,60,20,.4)'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(bx, by + 20); ctx.quadraticCurveTo(bx + 6, by + 42, bx - 3, by + 60); ctx.stroke();
+    }
+    return s;
+  };
+  const wN = mkParkWall(S); wN.addPlane(S, wallH, 0, 0, 1, 1, new THREE.Vector3(0, wallH / 2, -PARK), 0);
+  const wS = mkParkWall(S); wS.addPlane(S, wallH, 0, 0, 1, 1, new THREE.Vector3(0, wallH / 2, PARK), Math.PI);
+  const wE = mkParkWall(S); wE.addPlane(S, wallH, 0, 0, 1, 1, new THREE.Vector3(PARK, wallH / 2, 0), -Math.PI / 2);
+  const wW = mkParkWall(S); wW.addPlane(S, wallH, 0, 0, 1, 1, new THREE.Vector3(-PARK, wallH / 2, 0), Math.PI / 2);
+  [wN, wS, wE, wW].forEach((s) => { s.snapshotBase(); s.texture.needsUpdate = true; });
+
+  // ---- 입구: 줄무늬 기둥 (칠할 수 있음) + JELLY LAND 아치 간판 ----
+  const pillarPaint = {
+    top: false,
+    paint(surf) {
+      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
+      const sw = H / 9;
+      for (let i = 0; i < 9; i++) {
+        ctx.fillStyle = i % 2 ? '#fdf6ec' : '#e84d6f';
+        ctx.fillRect(0, i * sw, W, sw + 1);
+      }
+      ctx.fillStyle = 'rgba(0,0,0,.1)'; ctx.fillRect(0, 0, W, 5);
+    },
+  };
+  makePaintBox(-3.4, 20.8, 1.0, 1.0, 4.6, 70, pillarPaint);
+  makePaintBox(3.4, 20.8, 1.0, 1.0, 4.6, 70, pillarPaint);
+  {
+    const cv = document.createElement('canvas');
+    cv.width = 1024; cv.height = 240;
+    const c2 = cv.getContext('2d');
+    c2.fillStyle = '#2a3547'; c2.fillRect(0, 0, 1024, 240);
+    c2.strokeStyle = '#d9a728'; c2.lineWidth = 10; c2.strokeRect(10, 10, 1004, 220);
+    const cols = ['#ff5f8f', '#f5a623', '#ffd166', '#34d399', '#38bdf8', '#a78bfa'];
+    c2.font = 'bold 120px sans-serif'; c2.textAlign = 'center'; c2.textBaseline = 'middle';
+    const word = 'JELLY LAND';
+    let tx = 512 - (word.length - 1) * 42;
+    for (let i = 0; i < word.length; i++) {
+      c2.fillStyle = cols[i % 6];
+      c2.fillText(word[i], tx, 122);
+      tx += 84;
+    }
+    for (let x = 40; x < 1024; x += 70) {
+      c2.fillStyle = '#ffe9b0';
+      c2.beginPath(); c2.arc(x, 32, 11, 0, 7); c2.fill();
+      c2.beginPath(); c2.arc(x, 208, 11, 0, 7); c2.fill();
+    }
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const sign = new THREE.Mesh(new THREE.BoxGeometry(7.8, 1.7, 0.25),
+      new THREE.MeshLambertMaterial({ map: tex }));
+    sign.position.set(0, 5.1, 20.8);
+    decorGroup.add(sign); solidMeshes.push(sign);
+  }
+
+  // ---- 어트랙션 ----
+  makeCarousel(-9, -7);
+  makeFerrisWheel(15, -14, -0.7);
+  makeDuck(-15, 12);
+
+  // ---- 노점 + 매표소 ----
+  makeSnackStall(8.5, 4.5, '솜사탕', '#f472b6', '#d13c73');
+  makeSnackStall(-9, 8.5, '팝콘', '#ef4444', '#b91c1c');
+  makeSnackStall(6.5, -8.5, '아이스크림', '#38bdf8', '#0e7fb5');
+  makePaintBox(3.2, 16.5, 1.5, 1.5, 2.3, 66, {
+    top: false,
+    paint(surf, info) {
+      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
+      const sw = W / 24;
+      for (let i = 0; i < 24; i++) { ctx.fillStyle = i % 2 ? '#fdf6ec' : '#f5a623'; ctx.fillRect(i * sw, 0, sw + 1, H); }
+      info.faces.forEach(([u0, u1], idx) => {
+        if (idx > 1) return;
+        const x0 = u0 * W, fw = (u1 - u0) * W;
+        ctx.fillStyle = '#2a3547'; ctx.fillRect(x0 + fw * 0.22, H * 0.3, fw * 0.56, H * 0.4);
+        ctx.fillStyle = '#cfe9fb'; ctx.fillRect(x0 + fw * 0.27, H * 0.35, fw * 0.46, H * 0.3);
+        ctx.fillStyle = '#2a3547'; ctx.font = `bold ${Math.floor(H * 0.1)}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.fillText('TICKET', x0 + fw / 2, H * 0.2); ctx.textAlign = 'left';
+      });
+    },
+  });
+
+  // ---- 선물상자 + 장난감 블록 (숨기 좋은 오브젝트) ----
+  makePaintBox(-4.5, 3.5, 1.4, 1.4, 1.4, 72, giftPainter('#e84d6f', '#ffd166'));
+  makePaintBox(12, 9, 1.15, 1.15, 1.15, 72, giftPainter('#38bdf8', '#fdf6ec'));
+  makePaintBox(-13, -13.5, 1.5, 1.5, 1.5, 72, giftPainter('#34d399', '#f472b6'));
+  makePaintBox(16, 2.5, 0.95, 0.95, 0.95, 72, giftPainter('#a78bfa', '#ffd166'));
+  makePaintBox(-18, 0.5, 1.25, 1.25, 1.25, 72, giftPainter('#ffd166', '#e84d6f'));
+  makePaintBox(4.5, 10.5, 1.2, 1.2, 1.2, 72, blockPainter('J', '#fbd6e3', '#d13c73'));
+  makePaintBox(-1.5, -12.5, 1.35, 1.35, 1.35, 72, blockPainter('L', '#cfe9fb', '#1d6fa5'));
+  makePaintBox(11.5, -3.5, 1.1, 1.1, 1.1, 72, blockPainter('Y', '#d9f3e2', '#1f8a5b'));
+
+  // ---- 소품: 롤리팝·풍선수레·솜사탕나무·가로등 ----
+  makeLollipop(-6.5, 13.5, '#e84d6f');
+  makeLollipop(13.5, -8.5, '#38bdf8');
+  makeLollipop(-12.5, 3.5, '#a78bfa');
+  makeLollipop(9.5, 13, '#34d399');
+  makeBalloonCart(-3.5, 12);
+  makeBalloonCart(10.5, 0.5);
+  [[-20, -18], [-20.5, 8], [20.5, 10], [20, -6], [-8, -18.5], [8, 18.5], [-16.5, 18], [19, 17]].forEach(([x, z]) => makeCandyTree(x, z));
+  [[-5.2, -2.2], [5.2, -2.2], [-5.2, 5.4], [5.2, 5.4], [0, 8.2], [0, -5.8]].forEach(([x, z]) => makeParkLamp(x * 1.45, z * 1.45));
+
+  // 경기장 경계 충돌
+  colliders.push(
+    { x1: -PARK - 2, z1: -PARK - 2, x2: PARK + 2, z2: -PARK },
+    { x1: -PARK - 2, z1: PARK, x2: PARK + 2, z2: PARK + 2 },
+    { x1: -PARK - 2, z1: -PARK - 2, x2: -PARK, z2: PARK + 2 },
+    { x1: PARK, z1: -PARK - 2, x2: PARK + 2, z2: PARK + 2 },
+  );
+}
+
 // ---------------- 3D 젤리맨 캐릭터 (원작 스타일) ----------------
 // 새하얀 인간형 젤리 몸 — 눈 없음, 몸 전체가 페인트 캔버스, 자세 변형 가능
 // cloneFrom을 주면 그 시점의 페인트 상태를 복사(가짜용)
@@ -1100,7 +1739,10 @@ function buildJelly(sizeScale = 1, cloneFrom = null) {
     worldPos: new THREE.Vector3(), normal: new THREE.Vector3(0, 1, 0),
   };
   applyPose(j, 0);
-  g.traverse((o) => { o.userData.jelly = j; });
+  g.traverse((o) => {
+    o.userData.jelly = j;
+    if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }
+  });
   return j;
 }
 
@@ -2600,6 +3242,7 @@ function animate() {
   const dt = Math.min(0.05, clock.getDelta());
   const now = performance.now();
   const st = game.state;
+  mapAnims.forEach((f) => f(dt, now));   // 맵 장식 애니메이션 (관람차·회전목마·구름 등)
 
   if (!(st === 'hide' && game.editCam)) camera.up.set(0, 1, 0);   // 편집 뷰 외에는 기본 업벡터
 
