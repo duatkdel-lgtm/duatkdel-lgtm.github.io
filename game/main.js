@@ -1011,16 +1011,20 @@ function pointerEnd(e) {
   const isTap = p.moved < 14 && performance.now() - p.t0 < 420 && p.kind === 'look';
   if (!isTap || game.confirmOpen) return;
 
-  if (game.state === 'hide' && game.placing) {
+  if (game.state === 'hide') {
+    // 벽/바닥/상자를 그냥 탭하면 그 자리에 붙음 (🃏 모드면 가짜 배치)
     const hit = raycastScreen(e.clientX, e.clientY, true);
+    const isDecoy = game.placing === 'decoy';
     if (hit && hit.object.userData.surface && !hit.object.userData.chamRole) {
-      if (hit.point.distanceTo(player.pos) > 14) { toast('너무 멀어요! 좀 더 가까이 가세요', 1300); return; }
-      const isReal = game.placing === 'real';
-      openConfirm(isReal ? '🕴️ 여기에 붙을까요?' : '🃏 가짜를 놓을까요?', e.clientX, e.clientY, () => {
-        placeChameleonAt(hit, isReal);
+      if (hit.point.distanceTo(player.pos) > 14) {
+        if (isDecoy) toast('너무 멀어요! 좀 더 가까이 가세요', 1300);
+        return;
+      }
+      openConfirm(isDecoy ? '🃏 가짜를 놓을까요?' : '🕴️ 여기에 붙을까요?', e.clientX, e.clientY, () => {
+        placeChameleonAt(hit, !isDecoy);
         setPlacing(null);
       });
-    } else toast('그릴 수 있는 표면을 탭하세요', 1200);
+    } else if (isDecoy) toast('그릴 수 있는 표면을 탭하세요', 1200);
   } else if (game.state === 'seek' && p.type === 'mouse') {
     shoot();   // PC: 클릭 = 조준점으로 발사
   }
@@ -1183,11 +1187,10 @@ function setPaintMode(on) {
 }
 function setPlacing(mode) {
   game.placing = mode;
-  $('hideBtn').classList.toggle('on', mode === 'real');
   $('decoyBtn').classList.toggle('on', mode === 'decoy');
   if (mode) {
     setPaintModeQuiet(false);
-    setHint(mode === 'real' ? '🕴️ 젤리맨이 붙을 곳(벽/바닥/상자)을 탭하세요' : '🃏 가짜를 붙일 곳을 탭하세요');
+    setHint('🃏 가짜를 붙일 곳을 탭하세요');
   } else if (!game.paintMode) setHint('');
 }
 function setPaintModeQuiet(on) {
@@ -1205,7 +1208,6 @@ $('poseBtn').addEventListener('click', () => {
   applyPose(game.cham, next);
   toast(`자세: ${POSES[next].name}`, 1100);
 });
-$('hideBtn').addEventListener('click', () => { sfx.click(); setPlacing(game.placing === 'real' ? null : 'real'); });
 $('decoyBtn').addEventListener('click', () => {
   if (game.decoysLeft <= 0) return;
   sfx.click(); setPlacing(game.placing === 'decoy' ? null : 'decoy');
@@ -1261,6 +1263,8 @@ function beginHide() {
   setPhaseUI();
   updatePaintbarUI();
   toast(`${teamLabel(game.hiderTeam)} — 하얀 젤리맨을 색칠해서 위장하세요!`, 2600);
+  setHint('👆 벽/바닥/상자를 탭하면 그 자리에 붙어요');
+  setTimeout(() => { if (game.state === 'hide' && !game.paintMode && !game.placing) setHint(''); }, 5000);
 }
 
 function autoPlace() {
