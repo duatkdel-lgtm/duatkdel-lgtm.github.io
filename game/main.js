@@ -4,6 +4,8 @@
 //  A팀: 기기를 넘겨받아 샷건으로 진짜 젤리맨을 사냥
 // ============================================================
 import * as THREE from 'three';
+import { GLTFLoader } from './lib/GLTFLoader.js';
+import { DRACOLoader } from './lib/DRACOLoader.js';
 
 // ---------------- 유틸 ----------------
 const $ = (id) => document.getElementById(id);
@@ -284,6 +286,72 @@ function clearMap() {
   scene.add(decorGroup);
 }
 
+// ---------------- 3D 에셋 모델 (CC0 — assets/CREDITS.md) ----------------
+const gltfLoader = new GLTFLoader();
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath('./lib/draco/');
+gltfLoader.setDRACOLoader(dracoLoader);
+const modelCache = new Map();   // 파일명 -> Promise<scene>
+function loadModel(file) {
+  if (!modelCache.has(file)) {
+    modelCache.set(file, new Promise((res, rej) => {
+      gltfLoader.load(`assets/models/${file}`, (g) => {
+        // PBR(Standard) → Lambert 변환: 게임의 토이 라이팅과 톤을 맞춤
+        g.scene.traverse((o) => {
+          if (!o.isMesh) return;
+          const conv = (m) => {
+            const lm = new THREE.MeshLambertMaterial({
+              color: m.color ? m.color.clone() : 0xffffff,
+              map: m.map || null,
+              transparent: !!m.transparent,
+              opacity: m.opacity !== undefined ? m.opacity : 1,
+              side: m.side,
+            });
+            lm.vertexColors = !!m.vertexColors;
+            return lm;
+          };
+          o.material = Array.isArray(o.material) ? o.material.map(conv) : conv(o.material);
+        });
+        res(g.scene);
+      }, undefined, rej);
+    }));
+  }
+  return modelCache.get(file);
+}
+// 장식 모델 배치: size = 가장 긴 수평 변(m), 바닥에 정렬, (x,z)가 중심
+// 충돌 반경은 동기로 등록(모든 기기 동일), 메시는 로드되는 대로 등장
+function placeModel(file, x, z, size, yaw = 0, collideR = 0) {
+  const group = decorGroup;
+  if (collideR > 0) colliders.push({ x1: x - collideR, z1: z - collideR, x2: x + collideR, z2: z + collideR });
+  loadModel(file).then((src) => {
+    if (group !== decorGroup) return;   // 이미 다음 라운드로 넘어감
+    const m = src.clone(true);
+    const box = new THREE.Box3().setFromObject(m);
+    const sz = box.getSize(new THREE.Vector3());
+    const ctr = box.getCenter(new THREE.Vector3());
+    const s = size / Math.max(sz.x, sz.z, 0.001);
+    m.scale.setScalar(s);
+    m.position.set(-ctr.x * s, -box.min.y * s, -ctr.z * s);
+    const wrap = new THREE.Group();
+    wrap.position.set(x, 0, z);
+    wrap.rotation.y = yaw;
+    wrap.add(m);
+    m.traverse((o) => {
+      if (o.isMesh) {
+        o.castShadow = sun.castShadow;
+        o.receiveShadow = sun.castShadow;
+        solidMeshes.push(o);
+      }
+    });
+    group.add(wrap);
+  }).catch(() => {});
+}
+// 첫 로딩을 미리 — 라운드 시작 때 끊김 없이 등장
+['bench.gltf', 'tree-big.gltf', 'tree-small.gltf', 'sedan.gltf', 'taxi.gltf', 'van.gltf',
+ 'police-car.gltf', 'ice-cream-truck.gltf', 'lollypop.gltf', 'ice-cream.gltf', 'popsicle.gltf',
+ 'cupcake.gltf', 'plant.gltf', 'formation-rock.gltf', 'formation-stone.gltf', 'fountain.glb',
+].forEach(loadModel);
+
 // 야외 맵 공용: 그라데이션 하늘 돔 + 뭉게구름
 function addOutdoorSky(topCol, horizonCol, cloudCol = '#ffffff') {
   const cv = document.createElement('canvas');
@@ -541,6 +609,21 @@ function buildTownMap() {
 
   // ---- 나무 ----
   [[-19, -5], [19, 7], [-7, 17], [17, 17], [-19, -17], [5, -11]].forEach(([x, z]) => addTree(x, z));
+
+  // ---- 고퀄 3D 모델 소품 (CC0) ----
+  placeModel('fountain.glb', 0, 0, 5.2, 0, 2.0);                    // 광장 분수대
+  placeModel('sedan.gltf', 1.6, 8.5, 2.1, Math.PI + 0.06, 1.1);     // 길가 주차 차량들
+  placeModel('taxi.gltf', -1.6, -8.5, 2.1, 0.05, 1.1);
+  placeModel('police-car.gltf', 11.5, -1.6, 2.1, Math.PI / 2, 1.1);
+  placeModel('van.gltf', -11.5, 1.6, 2.2, -Math.PI / 2 + 0.08, 1.1);
+  placeModel('tree-big.gltf', -19, -11, 2.6, rand(0, 6), 0.4);
+  placeModel('tree-big.gltf', 17.5, 3, 2.6, rand(0, 6), 0.4);
+  placeModel('tree-small.gltf', -6, 12, 1.8, rand(0, 6), 0.35);
+  placeModel('tree-small.gltf', 7, 16, 1.8, rand(0, 6), 0.35);
+  placeModel('bench.gltf', 3.2, 4.2, 1.5, -2.2, 0.5);
+  placeModel('bench.gltf', -4, -4.5, 1.5, 0.6, 0.5);
+  placeModel('formation-rock.gltf', 18, -9, 1.6, rand(0, 6), 0.8);
+  placeModel('formation-stone.gltf', -17, 16, 1.3, rand(0, 6), 0.7);
 
   // 경기장 경계 충돌
   colliders.push(
@@ -1083,6 +1166,8 @@ function buildGymMap() {
   });
   // 화분들
   plantPot(-13.5, -8.8); plantPot(14, 8.5); plantPot(21, -1.5);
+  placeModel('plant.gltf', -21, 8.7, 0.75, rand(0, 6), 0.3);
+  placeModel('plant.gltf', 9, 9.2, 0.75, rand(0, 6), 0.3);
 
   // 경기장 경계 충돌
   colliders.push(
@@ -1663,6 +1748,20 @@ function buildParkMap() {
   makeBalloonCart(10.5, 0.5);
   [[-20, -18], [-20.5, 8], [20.5, 10], [20, -6], [-8, -18.5], [8, 18.5], [-16.5, 18], [19, 17]].forEach(([x, z]) => makeCandyTree(x, z));
   [[-5.2, -2.2], [5.2, -2.2], [-5.2, 5.4], [5.2, 5.4], [0, 8.2], [0, -5.8]].forEach(([x, z]) => makeParkLamp(x * 1.45, z * 1.45));
+
+  // ---- 고퀄 3D 모델 소품 (CC0) ----
+  placeModel('ice-cream-truck.gltf', -16.5, -13, 4.2, 0.7, 2.0);    // 아이스크림 트럭
+  placeModel('bench.gltf', 2.8, 11.2, 1.5, Math.PI + 0.3, 0.5);
+  placeModel('bench.gltf', -11.2, 2.4, 1.5, Math.PI / 2, 0.5);
+  placeModel('bench.gltf', 11.2, -5.8, 1.5, -Math.PI / 2 + 0.4, 0.5);
+  placeModel('ice-cream.gltf', 0, -10.6, 1.6, 0.4, 0.7);            // 대형 디저트 조형물
+  placeModel('popsicle.gltf', 12.8, 5.6, 1.5, -0.6, 0.6);
+  placeModel('cupcake.gltf', -7.2, -12.8, 1.3, 0.9, 0.6);
+  placeModel('lollypop.gltf', 17, 13, 1.5, rand(0, 6), 0.3);
+  placeModel('lollypop.gltf', -18.5, 6, 1.5, rand(0, 6), 0.3);
+  placeModel('tree-big.gltf', 20.5, 3, 2.4, rand(0, 6), 0.4);
+  placeModel('tree-big.gltf', 5.5, -17.5, 2.4, rand(0, 6), 0.4);
+  placeModel('tree-small.gltf', -20.8, -4, 1.7, rand(0, 6), 0.35);
 
   // 경기장 경계 충돌
   colliders.push(
