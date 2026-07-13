@@ -625,8 +625,9 @@ const game = {
   decoys: [], decoysLeft: 3,
   placing: null,           // null | 'decoy'
   paintMode: false,
-  editCam: false,          // 붙은 뒤 벽 정면 고정 편집 카메라
+  editCam: false,          // 붙은 뒤 몸 중심 편집 카메라 (궤도 회전 가능)
   editDist: 2.2, editPanX: 0, editPanY: 0,
+  editYaw: 0, editPitch: 0,   // 몸 둘레로 카메라 돌리기 (옆면/아랫면 칠하기)
   tool: 'brush', brushM: 0.05, color: '#e53e3e',
   recoil: 0,
   nextBlink: 0, blinkUntil: 0, blinking: false,
@@ -753,6 +754,7 @@ $('previewTool').addEventListener('click', () => {
   const on = game.editDist < 4;
   game.editDist = on ? 6 : 1.4;
   game.editPanX = 0; game.editPanY = 0;
+  game.editYaw = 0; game.editPitch = 0;
   $('previewTool').classList.toggle('on', on);
   toast(on ? '👁️ 술래 눈에는 이렇게 보여요!' : '🎨 편집 거리로 복귀', 1200);
 });
@@ -1040,10 +1042,16 @@ canvas.addEventListener('pointermove', (e) => {
     const looks = [...pointers.values()].filter((q) => q.kind === 'look');
     const f = looks.length > 1 ? 0.5 : 1;
     if (game.editCam && game.state === 'hide') {
-      // 편집 뷰: 드래그 = 종이 옮기듯 화면 평행이동
-      const k = game.editDist * 0.0016 * f;
-      game.editPanX = clamp(game.editPanX - dx * k, -1.3, 1.3);
-      game.editPanY = clamp(game.editPanY + dy * k, -1.0, 1.0);
+      if (looks.length === 1 || game.paintMode) {
+        // 드래그(그리기 모드에선 두 손가락) = 몸 둘레로 돌려보기 → 옆면·아랫면 칠하기
+        game.editYaw = clamp(game.editYaw + dx * 0.006 * f, -1.35, 1.35);
+        game.editPitch = clamp(game.editPitch + dy * 0.005 * f, -1.1, 1.1);
+      } else {
+        // (이동 모드) 두 손가락 드래그 = 화면 평행이동
+        const k = game.editDist * 0.0016 * f;
+        game.editPanX = clamp(game.editPanX - dx * k, -1.3, 1.3);
+        game.editPanY = clamp(game.editPanY + dy * k, -1.0, 1.0);
+      }
     } else {
       player.yaw -= dx * 0.0038 * f;
       player.pitch = clamp(player.pitch - dy * 0.0032 * f, -1.15, 1.15);
@@ -1262,7 +1270,7 @@ function setPaintMode(on) {
   if (on) {
     setPlacing(null);
     stickHide(); stickPtr = null;
-    setHint(isTouchDevice ? '🕴️ 내 몸에만 칠해져요 · ✏️펜슬 필압=굵기 · 💉벽 색 추출 · 두 손가락: 회전/확대' : '🕴️ 내 몸에만 칠해져요 · 💉벽 색 추출 · 우클릭: 시점 · 휠: 확대');
+    setHint(isTouchDevice ? '🕴️ 손가락=그리기 · 옆면은 두 손가락 드래그로 돌려서! · 💉벽 색 추출' : '🕴️ 드래그=그리기 · 우클릭 드래그=돌려보기 · 💉벽 색 추출');
     updatePaintbarUI();
   } else { setHint(''); setZoom(70); }
 }
@@ -1320,11 +1328,12 @@ $('poseBtn').addEventListener('click', () => {
 function enterEditCam(withPaint) {
   game.editCam = true;
   game.editDist = 1.4; game.editPanX = 0; game.editPanY = 0;   // 몸이 화면에 꽉 차게
+  game.editYaw = 0; game.editPitch = 0;
   $('previewTool').classList.remove('on');
   stickHide(); stickPtr = null;
   show('walkBtn', true);
   if (withPaint) setPaintMode(true);
-  else setHint('드래그: 화면 이동 · 핀치: 확대 · 팔다리 드래그: 자세 · 벽 탭: 이사');
+  else setHint('드래그: 돌려보기 · 두 손가락: 이동/확대 · 팔다리 드래그: 자세 · 벽 탭: 이사');
 }
 function exitEditCam() {
   game.editCam = false;
@@ -1552,15 +1561,19 @@ function animate() {
       collide();
     }
     if (inEdit) {
-      // 편집 뷰: 벽 정면에 카메라 고정 (팬/줌만)
-      const q = game.cham.qBasis;
-      const xA = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
-      const yA = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+      // 편집 뷰: 몸 중심 궤도 카메라 (드래그로 옆면·아랫면까지 돌려보며 칠하기)
+      const qb = game.cham.qBasis;
+      const qCam = qb.clone()
+        .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), game.editYaw))
+        .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), game.editPitch));
+      const xA = new THREE.Vector3(1, 0, 0).applyQuaternion(qb);
+      const yA = new THREE.Vector3(0, 1, 0).applyQuaternion(qb);
+      const dir = new THREE.Vector3(0, 0, 1).applyQuaternion(qCam);
       const look = game.cham.worldPos.clone()
         .addScaledVector(xA, game.editPanX)
         .addScaledVector(yA, game.editPanY);
-      camera.up.copy(yA);
-      camera.position.copy(look).addScaledVector(game.cham.normal, game.editDist);
+      camera.up.copy(new THREE.Vector3(0, 1, 0).applyQuaternion(qCam));
+      camera.position.copy(look).addScaledVector(dir, game.editDist);
       camera.lookAt(look);
     } else if (st === 'hide' && game.cham && !game.chamPlaced) {
       // 3인칭: 내 젤리맨이 앞에서 걸어다님
