@@ -79,7 +79,7 @@ const sfx = {
 
 // ---------------- 렌더러 / 씬 ----------------
 const canvas = $('c');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });   // 화면 픽셀 스포이드용
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -1266,6 +1266,7 @@ function makeCarousel(cx, cz) {
     spin.add(horse);
   }
   g.add(spin);
+  spin.traverse((o) => { o.userData.noAttach = true; });   // 움직이는 부분엔 붙기 금지
   decorGroup.add(g);
   g.traverse((o) => { if (o.isMesh) solidMeshes.push(o); });
   mapAnims.push((dt, t) => {
@@ -1337,6 +1338,7 @@ function makeFerrisWheel(cx, cz, yaw) {
     wheel.add(pivot);
   }
   g.add(wheel);
+  wheel.traverse((o) => { o.userData.noAttach = true; });   // 움직이는 부분엔 붙기 금지
   decorGroup.add(g);
   g.traverse((o) => { if (o.isMesh) solidMeshes.push(o); });
   mapAnims.push((dt) => {
@@ -1497,7 +1499,7 @@ function makeBalloonCart(x, z) {
     cluster.add(b);
   }
   decorGroup.add(cluster);
-  cluster.traverse((o) => { if (o.isMesh) solidMeshes.push(o); });
+  cluster.traverse((o) => { o.userData.noAttach = true; if (o.isMesh) solidMeshes.push(o); });
   const y0 = cluster.position.y, ph = rand(0, 6);
   mapAnims.push((dt, t) => {
     cluster.position.y = y0 + Math.sin(t * 0.0012 + ph) * 0.09;
@@ -1527,7 +1529,7 @@ function makeDuck(x, z) {
   duck.position.set(x, 0.55, z);
   duck.rotation.y = rand(0, Math.PI * 2);
   decorGroup.add(duck);
-  duck.traverse((o) => { if (o.isMesh) solidMeshes.push(o); });
+  duck.traverse((o) => { o.userData.noAttach = true; if (o.isMesh) solidMeshes.push(o); });
   mapAnims.push((dt, t) => {
     duck.position.y = 0.55 + Math.sin(t * 0.0015) * 0.05;
     duck.rotation.z = Math.sin(t * 0.001) * 0.05;
@@ -1834,7 +1836,7 @@ function buildJelly(sizeScale = 1, cloneFrom = null) {
   decorGroup.add(g);
   const j = {
     group: g, surface: surf, armL, armR, legL, legR,
-    baseScale: sizeScale, pose: 0, qBasis: null, customRoll: 0, squash: 1,
+    baseScale: sizeScale, pose: 0, qBasis: null, customRoll: 0, squash: 1, stand: false,
     worldPos: new THREE.Vector3(), normal: new THREE.Vector3(0, 1, 0),
   };
   applyPose(j, 0);
@@ -1859,7 +1861,12 @@ function applyPose(j, idx) {
 function applyAttachOrientation(j) {
   const roll = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), j.customRoll);
   j.group.quaternion.copy(j.qBasis.clone().multiply(roll));
-  // 몸 중심(로컬 y≈0.55)이 탭한 지점에 오도록 배치
+  if (j.stand) {
+    // 서기(조형물 모드): 발이 표면에 닿게. 물구나무 등 roll은 jellyLift로 보정
+    j.group.position.copy(j.worldPos).addScaledVector(j.normal, 0.01 + jellyLift(j));
+    return;
+  }
+  // 눕기: 몸 중심(로컬 y≈0.55)이 탭한 지점에 오도록 배치
   const yAxis = new THREE.Vector3(0, 1, 0).applyQuaternion(j.group.quaternion);
   j.group.position.copy(j.worldPos)
     .addScaledVector(j.normal, 0.115 * j.baseScale)
@@ -1872,11 +1879,9 @@ function jellyLift(j) {
   return Math.max(0, -Math.cos(th)) * 1.08 * s * j.squash + Math.abs(Math.sin(th)) * 0.18 * s;
 }
 
-// 표면에 젤리맨을 붙임: 등(-Z)을 벽에 대고, 머리는 위쪽으로
-function attachJelly(j, hit) {
-  const n = worldNormalOf(hit);
+// 눕기 기준축: 등(-Z)을 표면에 대고, 머리는 위쪽(바닥이면 보던 방향)
+function lieBasis(n) {
   const z = n.clone();
-  // 바닥/천장이면 플레이어가 보던 방향을 머리 방향으로
   let up = Math.abs(n.y) > 0.9
     ? new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw))
     : new THREE.Vector3(0, 1, 0);
@@ -1885,9 +1890,25 @@ function attachJelly(j, hit) {
   up.normalize();
   const x = new THREE.Vector3().crossVectors(up, z).normalize();
   const y = new THREE.Vector3().crossVectors(z, x).normalize();
-  j.qBasis = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+}
+// 서기 기준축: 머리 = 표면 법선, 몸 정면은 플레이어 쪽
+function standBasis(j) {
+  const y = j.normal.clone();
+  let z = player.pos.clone().sub(j.worldPos);
+  z.addScaledVector(y, -z.dot(y));
+  if (z.lengthSq() < 1e-4) z.set(0, 0, 1);
+  z.normalize();
+  const x = new THREE.Vector3().crossVectors(y, z).normalize();
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+}
+// 표면에 젤리맨을 붙임 (stand 플래그에 따라 서기/눕기)
+function attachJelly(j, hit) {
+  const n = worldNormalOf(hit);
   j.worldPos.copy(hit.point);
   j.normal.copy(n);
+  if (j.stand && n.y < 0.6) j.stand = false;   // 벽·급경사에는 설 수 없음
+  j.qBasis = j.stand ? standBasis(j) : lieBasis(n);
   applyAttachOrientation(j);
 }
 
@@ -2060,6 +2081,22 @@ function buildNearbyPalette(hit) {
     });
     game.nearbyColors = cols.slice(0, 5).map((c) => `rgb(${c[0]},${c[1]},${c[2]})`);
     if (game.nearbyColors[0]) game.color = game.nearbyColors[0];   // 밑색 자동 세팅
+  } else {
+    // 페인트 캔버스가 없는 구조물(3D 모델 등): 재질 색으로 팔레트 구성
+    let root = hit.object;
+    while (root.parent && root.parent !== decorGroup && root.parent !== scene) root = root.parent;
+    const cols = [];
+    root.traverse((o) => {
+      if (!o.isMesh) return;
+      (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => {
+        if (!m.color) return;
+        const c = m.color.clone().convertLinearToSRGB();
+        const d = [Math.round(c.r * 255), Math.round(c.g * 255), Math.round(c.b * 255)];
+        if (!cols.some((q) => Math.abs(q[0] - d[0]) + Math.abs(q[1] - d[1]) + Math.abs(q[2] - d[2]) < 40)) cols.push(d);
+      });
+    });
+    game.nearbyColors = cols.slice(0, 5).map((c) => `rgb(${c[0]},${c[1]},${c[2]})`);
+    if (game.nearbyColors[0]) game.color = game.nearbyColors[0];
   }
   renderSwatches();
 }
@@ -2244,6 +2281,22 @@ function eyedrop(hit) {
     sfx.click();
   } catch (e) {}
 }
+// 화면 픽셀에서 색 추출 (페인트 캔버스가 없는 3D 모델·구조물용)
+function eyedropScreen(cx, cy) {
+  try {
+    const gl = renderer.getContext();
+    const dpr = renderer.getPixelRatio();
+    const px = clamp(Math.round(cx * dpr), 0, gl.drawingBufferWidth - 1);
+    const py = clamp(gl.drawingBufferHeight - 1 - Math.round(cy * dpr), 0, gl.drawingBufferHeight - 1);
+    const buf = new Uint8Array(4);
+    gl.readPixels(px, py, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    game.color = `rgb(${buf[0]},${buf[1]},${buf[2]})`;
+    game.tool = 'brush';
+    updatePaintbarUI();
+    toast('🎨 색 추출 완료!', 900);
+    sfx.click();
+  } catch (e) {}
+}
 
 // ---------------- 숨기/가짜 배치 ----------------
 function placeChameleonAt(hit, isReal) {
@@ -2263,6 +2316,7 @@ function placeChameleonAt(hit, isReal) {
     applyPose(decoy, game.cham.pose);
     ['armL', 'armR', 'legL', 'legR'].forEach((k) => { decoy[k].rotation.z = game.cham[k].rotation.z; });
     decoy.customRoll = game.cham.customRoll;
+    decoy.stand = game.cham.stand;
     attachJelly(decoy, hit);
     game.decoys.push(decoy);
     game.decoysLeft--;
@@ -2333,12 +2387,14 @@ canvas.addEventListener('pointerdown', (e) => {
       }
       p.kind = 'paint';
       const hit = raycastScreen(e.clientX, e.clientY, true);
-      if (hit && hit.object.userData.surface) {
-        if (game.tool === 'drop') { eyedrop(hit); p.kind = 'drop'; }   // 색만 추출, 탭으로 처리 안 함
-        else {
-          if (game.cham && hit.object.userData.surface === game.cham.surface) pushUndo(game.cham.surface);
-          p.last = paintAt(hit, null, e.pressure, e.pointerType === 'pen');
-        }
+      if (game.tool === 'drop') {
+        // 스포이드: 페인트 면은 캔버스에서 정확히, 그 외(3D 모델·구조물)는 화면 픽셀에서
+        if (hit && hit.object.userData.surface) eyedrop(hit);
+        else eyedropScreen(e.clientX, e.clientY);
+        p.kind = 'drop';
+      } else if (hit && hit.object.userData.surface) {
+        if (game.cham && hit.object.userData.surface === game.cham.surface) pushUndo(game.cham.surface);
+        p.last = paintAt(hit, null, e.pressure, e.pointerType === 'pen');
       }
     } else {
       // 두 번째 손가락 → 시점 회전/핀치 줌으로 전환
@@ -2452,7 +2508,9 @@ function pointerEnd(e) {
     // 그리기 모드에서는 시점 이동과 그리기만 — 탭해도 아무 반응 없음
     const hit = raycastScreen(e.clientX, e.clientY, true);
     const isDecoy = game.placing === 'decoy';
-    if (hit && hit.object.userData.surface && !hit.object.userData.chamRole) {
+    const ud = hit ? hit.object.userData : null;
+    // 페인트 벽뿐 아니라 지붕·조형물·3D 모델 등 모든 구조물에 붙을 수 있음
+    if (hit && hit.face && ud && !ud.jelly && !ud.chamRole && !ud.noAttach) {
       if (hit.point.distanceTo(player.pos) > 14) {
         if (isDecoy) toast('너무 멀어요! 좀 더 가까이 가세요', 1300);
         return;
@@ -2461,7 +2519,7 @@ function pointerEnd(e) {
         placeChameleonAt(hit, !isDecoy);
         setPlacing(null);
       });
-    } else if (isDecoy) toast('그릴 수 있는 표면을 탭하세요', 1200);
+    } else if (isDecoy) toast('구조물 표면을 탭하세요', 1200);
   } else if (game.state === 'seek' && p.type === 'mouse') {
     shoot();   // PC: 클릭 = 조준점으로 발사
   }
@@ -2731,25 +2789,33 @@ function nudgeJelly(dx, dy) {
   const by = new THREE.Vector3(0, 1, 0).applyQuaternion(j.qBasis);
   const right = proj(camR, bx), up = proj(camU, by);
   const target = j.worldPos.clone().addScaledVector(right, dx).addScaledVector(up, dy);
-  // 목표 지점 위에서 표면으로 레이캐스트 → 실제 붙을 자리 확인
+  // 목표 지점 위에서 표면으로 레이캐스트 → 실제 붙을 자리 확인 (모델 등 모든 구조물 포함)
   nudgeRay.set(target.clone().addScaledVector(j.normal, 0.3), j.normal.clone().negate());
   nudgeRay.far = 0.6;
-  const hit = nudgeRay.intersectObjects(paintMeshes, false)
-    .find((h) => h.object.userData.surface && !h.object.userData.jelly);
+  const hit = nudgeRay.intersectObjects(solidMeshes, false)
+    .find((h) => h.face && !h.object.userData.jelly && !h.object.userData.noAttach);
   if (!hit) return false;   // 표면 가장자리 밖
   const n = worldNormalOf(hit);
-  if (n.dot(j.normal) < 0.985) {
-    // 다른 기울기의 면으로 넘어감: 머리 방향을 최대한 유지하며 기준축 재계산
-    const z = n.clone();
-    let u = by.clone().addScaledVector(z, -by.dot(z));
-    if (u.lengthSq() < 1e-4) u = bx.clone().addScaledVector(z, -bx.dot(z));
-    u.normalize();
-    const x = new THREE.Vector3().crossVectors(u, z).normalize();
-    const y = new THREE.Vector3().crossVectors(z, x).normalize();
-    j.qBasis = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
-    j.normal.copy(n);
-  }
   j.worldPos.copy(hit.point);
+  if (n.dot(j.normal) < 0.985) {
+    if (j.stand && n.y >= 0.6) {
+      // 서기 유지한 채 새 기울기의 면으로
+      j.normal.copy(n);
+      j.qBasis = standBasis(j);
+    } else {
+      // 다른 기울기의 면으로 넘어감: 머리 방향을 최대한 유지하며 기준축 재계산
+      j.stand = false;
+      const z = n.clone();
+      let u = by.clone().addScaledVector(z, -by.dot(z));
+      if (u.lengthSq() < 1e-4) u = bx.clone().addScaledVector(z, -bx.dot(z));
+      u.normalize();
+      const x = new THREE.Vector3().crossVectors(u, z).normalize();
+      const y = new THREE.Vector3().crossVectors(z, x).normalize();
+      j.qBasis = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+      j.normal.copy(n);
+    }
+    updateStandBtn();
+  }
   applyAttachOrientation(j);
   return true;
 }
@@ -2775,6 +2841,24 @@ window.addEventListener('keydown', (e) => {
   if (d) { e.preventDefault(); nudgeJelly(d[0] * 0.02, d[1] * 0.02); }
 });
 
+// ---------------- 서기/눕기 토글 (수평 표면에서 조형물처럼 서기) ----------------
+function updateStandBtn() {
+  const j = game.cham;
+  const can = game.editCam && game.chamPlaced && j && j.normal && j.normal.y > 0.6;
+  show('standBtn', !!can);
+  if (can) $('standBtn').innerHTML = j.stand ? '<span class="ico">🛌</span>눕기' : '<span class="ico">🧍</span>서기';
+}
+$('standBtn').addEventListener('click', () => {
+  const j = game.cham;
+  if (!j || !game.chamPlaced || !game.editCam) return;
+  sfx.click();
+  j.stand = !j.stand && j.normal.y > 0.6;
+  j.qBasis = j.stand ? standBasis(j) : lieBasis(j.normal);
+  applyAttachOrientation(j);
+  updateStandBtn();
+  toast(j.stand ? '🧍 조형물처럼 우뚝 섰어요!' : '🛌 표면에 납작 붙었어요', 1200);
+});
+
 // ---------------- 편집 카메라 (붙은 뒤 벽 정면 고정 뷰) ----------------
 function enterEditCam(withPaint) {
   game.editCam = true;
@@ -2784,6 +2868,7 @@ function enterEditCam(withPaint) {
   stickHide(); stickPtr = null;
   show('walkBtn', true);
   show('nudgePad', true);
+  updateStandBtn();
   if (withPaint) setPaintMode(true);
   else setHint('드래그: 돌려보기 · ✥패드: 미세 이동 · 팔다리 드래그: 자세 · 벽 탭: 이사');
 }
@@ -2791,6 +2876,7 @@ function exitEditCam() {
   game.editCam = false;
   show('walkBtn', false);
   show('nudgePad', false);
+  show('standBtn', false);
   show('posePanel', false);
   $('poseBtn').classList.remove('on');
   setPaintMode(false);
@@ -3315,7 +3401,7 @@ function netStartRound(m) {
 function serializeAttach(j) {
   return {
     p: j.worldPos.toArray(), n: j.normal.toArray(), q: j.qBasis.toArray(),
-    roll: j.customRoll, pose: j.pose,
+    roll: j.customRoll, pose: j.pose, stand: !!j.stand,
     limbs: ['armL', 'armR', 'legL', 'legR'].map((k) => j[k].rotation.z),
     scale: j.baseScale,
   };
@@ -3341,6 +3427,7 @@ function spawnRemoteJelly(a, tex, role) {
   applyPose(j, a.pose);
   ['armL', 'armR', 'legL', 'legR'].forEach((k, i) => { j[k].rotation.z = a.limbs[i]; });
   j.customRoll = a.roll;
+  j.stand = !!a.stand;
   j.worldPos.fromArray(a.p);
   j.normal.fromArray(a.n);
   j.qBasis = new THREE.Quaternion().fromArray(a.q);
