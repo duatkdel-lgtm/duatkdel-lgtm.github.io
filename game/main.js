@@ -628,11 +628,15 @@ function buildGymMap() {
     // 스피닝룸 다크 존
     ctx.fillStyle = '#121317';
     ctx.fillRect(zx(15), zy(-10), zx(22) - zx(15), zy(-3) - zy(-10));
-    // 정문 그린 매트 + 오렌지 라인
+    // 입구 로비 (밝은 타일 존) — 문 열면 여기부터 시작
+    ctx.fillStyle = '#a8a49b';
+    ctx.fillRect(zx(17), zy(2), zx(22) - zx(17), zy(10) - zy(2));
+    speckle(ctx, zx(17), zy(2), zx(22) - zx(17), zy(10) - zy(2), ['#9d998f', '#b3afa5'], 140, 1, 3, 0.6);
+    // 게이트 통로 그린 매트 + 오렌지 라인
     ctx.fillStyle = '#2f7d3b';
-    ctx.fillRect(zx(18.5), zy(4.5), zx(22) - zx(18.5), zy(8.5) - zy(4.5));
+    ctx.fillRect(zx(17), zy(5.2), zx(22) - zx(17), zy(7.8) - zy(5.2));
     ctx.strokeStyle = '#f97316'; ctx.lineWidth = 5;
-    ctx.strokeRect(zx(18.5), zy(4.5), zx(22) - zx(18.5), zy(8.5) - zy(4.5));
+    ctx.strokeRect(zx(17), zy(5.2), zx(22) - zx(17), zy(7.8) - zy(5.2));
     // 중앙 통로 라임 라인
     ctx.fillStyle = 'rgba(181,227,65,.5)';
     ctx.fillRect(zx(-13), zy(1.7), zx(14) - zx(-13), 4);
@@ -837,6 +841,45 @@ function buildGymMap() {
   };
   makeDoubleWall(15, -6.8, true, 6.4, 3, spinWallPaint);
   makeDoubleWall(19.8, -3.5, false, 4.4, 3, spinWallPaint);   // 입구 틈 x 15..17.6
+  // 스피닝실 입구 보라 네온 프레임 (로비에서 들어오면 우측에 바로 보임)
+  {
+    const neon = new THREE.Mesh(new THREE.BoxGeometry(2.7, 0.12, 0.14),
+      new THREE.MeshBasicMaterial({ color: 0xa855f7 }));
+    neon.position.set(16.3, 3.05, -3.5);
+    decorGroup.add(neon);
+  }
+
+  // ---- 입구 로비 파티션 (정문 → 로비 → 게이트 → 홀) ----
+  const lobbyWallPaint = (ctx, W, H) => {
+    ctx.fillStyle = '#f0ede7'; ctx.fillRect(0, 0, W, H);
+    speckle(ctx, 0, 0, W, H, ['#e7e3db', '#f7f4ee'], 300, 1, 3, 0.5);
+    ctx.fillStyle = '#f97316'; ctx.fillRect(0, H * 0.62, W, H * 0.09);
+    ctx.fillStyle = '#26282e'; ctx.font = `bold ${Math.floor(H * 0.16)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText('NONAME FITNESS', W / 4, H * 0.4);
+    ctx.fillText('NONAME FITNESS', W * 3 / 4, H * 0.4);
+    ctx.font = `bold ${Math.floor(H * 0.09)}px sans-serif`;
+    ctx.fillStyle = '#f97316';
+    ctx.fillText('WELCOME 💪', W / 4, H * 0.55);
+    ctx.fillText('WELCOME 💪', W * 3 / 4, H * 0.55);
+    ctx.textAlign = 'left';
+    neonStrip(ctx, 0, 0, W, H * 0.06);
+  };
+  makeDoubleWall(17, 3.5, true, 3, 3, lobbyWallPaint);      // 로비 남쪽 벽 (z 2..5)
+  makeDoubleWall(17, 9, true, 2, 3, lobbyWallPaint);        // 로비 북쪽 벽 (z 8..10)
+  // 스피드게이트 2개 (통로 z 5..8 사이)
+  const gatePaint = {
+    top: true,
+    paint(surf) {
+      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
+      ctx.fillStyle = '#eceae5'; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#f97316'; ctx.fillRect(0, 0, W, Math.max(6, H * 0.12));
+      ctx.fillStyle = '#26282e'; ctx.fillRect(W * 0.42, H * 0.3, W * 0.16, H * 0.2);
+      ctx.fillStyle = '#31f56b'; ctx.fillRect(W * 0.46, H * 0.34, W * 0.08, H * 0.1);
+    },
+  };
+  makePaintBox(17, 5.55, 0.55, 0.9, 1.05, 70, gatePaint);
+  makePaintBox(17, 7.45, 0.55, 0.9, 1.05, 70, gatePaint);
 
   // ---- 기구들 ----
   // 빨간 파워랙 2 (프리웨이트존)
@@ -931,7 +974,7 @@ function buildGymMap() {
     },
   });
   // 키오스크
-  makePaintBox(20.5, 4.9, 0.6, 0.5, 1.6, 70, {
+  makePaintBox(20.8, 3.4, 0.6, 0.5, 1.6, 70, {
     top: false,
     paint(surf) {
       const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
