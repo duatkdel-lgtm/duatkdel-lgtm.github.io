@@ -487,6 +487,37 @@ function buildTownMap() {
 // ============================================================
 const GYM_X = 22, GYM_Z = 10, GYM_H = 4.2;   // 실내 44 x 20m, 층고 4.2m
 
+// 노네임 공식 로고: 블랙 필 + 골드 테두리 + 실버 메탈릭 이탤릭 NONAME
+function drawNonameLogo(ctx, cx, cy, w) {
+  const h = w * 0.42, r = h / 2, lw = Math.max(2, w * 0.022);
+  const x0 = cx - w / 2, y0 = cy - h / 2;
+  const pill = () => {
+    ctx.beginPath();
+    ctx.moveTo(x0 + r, y0);
+    ctx.lineTo(x0 + w - r, y0);
+    ctx.arc(x0 + w - r, cy, r, -Math.PI / 2, Math.PI / 2);
+    ctx.lineTo(x0 + r, y0 + h);
+    ctx.arc(x0 + r, cy, r, Math.PI / 2, Math.PI * 1.5);
+    ctx.closePath();
+  };
+  ctx.save();
+  ctx.fillStyle = '#0a0a0a'; pill(); ctx.fill();
+  const gold = ctx.createLinearGradient(x0, y0, x0 + w, y0 + h);
+  gold.addColorStop(0, '#8a6a1a'); gold.addColorStop(0.3, '#f3d565');
+  gold.addColorStop(0.55, '#c9a227'); gold.addColorStop(0.8, '#f3d565'); gold.addColorStop(1, '#8a6a1a');
+  ctx.strokeStyle = gold; ctx.lineWidth = lw; pill(); ctx.stroke();
+  const silver = ctx.createLinearGradient(x0, y0, x0 + w, y0);
+  silver.addColorStop(0, '#b9b9b9'); silver.addColorStop(0.3, '#ffffff');
+  silver.addColorStop(0.5, '#9c9c9c'); silver.addColorStop(0.7, '#f4f4f4'); silver.addColorStop(1, '#c2c2c2');
+  ctx.fillStyle = silver;
+  ctx.font = `italic 900 ${Math.floor(h * 0.52)}px sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.transform(1, 0, -0.12, 1, 0, 0);   // 살짝 더 기울인 스피드체 느낌
+  ctx.fillText('NONAME', cx + cy * 0.12, cy + h * 0.03);
+  ctx.restore();
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+}
+
 function neonStrip(ctx, x, y, w, h) {
   const g = ctx.createLinearGradient(x, y, x + w, y);
   g.addColorStop(0, '#ff2fb3'); g.addColorStop(0.35, '#a855f7');
@@ -719,8 +750,9 @@ function buildGymMap() {
     // 하단 웨인스코팅
     ctx.fillStyle = '#dcd7cd'; ctx.fillRect(0, H * 0.72, W, H * 0.28);
     ctx.strokeStyle = '#c9a227'; ctx.lineWidth = 3; ctx.strokeRect(10, H * 0.75, W - 20, H * 0.2);
-    // 골드 포스터 6장
+    // 골드 포스터 6장 + 상단 중앙 공식 로고
     for (let i = 0; i < 6; i++) drawGymPoster(ctx, 30 + i * (W - 60) / 6, H * 0.16, (W - 60) / 6 - 24, H * 0.46);
+    drawNonameLogo(ctx, W / 2, H * 0.09, W * 0.2);
     neonStrip(ctx, 0, 0, W, H * 0.05);
     s.addPlane(D2, GYM_H, 0, 0, 1, 1, new THREE.Vector3(-GYM_X, GYM_H / 2, 0), Math.PI / 2);
     s.snapshotBase(); s.texture.needsUpdate = true;
@@ -732,13 +764,11 @@ function buildGymMap() {
     const ctx = s.ctx, W = s.canvas.width, H = s.canvas.height;
     ctx.fillStyle = '#26282e'; ctx.fillRect(0, 0, W, H);
     speckle(ctx, 0, 0, W, H, ['#212329', '#2b2d34'], 600, 1, 3, 0.6);
-    // 대형 로고
-    ctx.fillStyle = '#f5f3ee'; ctx.font = `bold ${Math.floor(H * 0.2)}px sans-serif`; ctx.textAlign = 'center';
-    ctx.fillText('NONAME FITNESS', W / 2, H * 0.4);
-    ctx.fillStyle = '#f97316'; ctx.fillRect(W * 0.25, H * 0.47, W * 0.5, 8);
+    // 공식 로고 (골드 필)
+    drawNonameLogo(ctx, W / 2, H * 0.36, W * 0.42);
     ctx.font = `bold ${Math.floor(H * 0.09)}px sans-serif`;
-    ctx.fillStyle = '#9ae62e';
-    ctx.fillText('노네임피트니스', W / 2, H * 0.6);
+    ctx.fillStyle = '#9ae62e'; ctx.textAlign = 'center';
+    ctx.fillText('노네임피트니스', W / 2, H * 0.62);
     ctx.textAlign = 'left';
     // 정문 (유리문 2짝, 남쪽 = 캔버스에서 z+6.5 위치)
     const doorX = (6.5 + GYM_Z) / D2;   // 동쪽 벽은 -Z→+Z가 캔버스 x- → x+ 반전 고려 없이 근사
@@ -854,14 +884,12 @@ function buildGymMap() {
     ctx.fillStyle = '#f0ede7'; ctx.fillRect(0, 0, W, H);
     speckle(ctx, 0, 0, W, H, ['#e7e3db', '#f7f4ee'], 300, 1, 3, 0.5);
     ctx.fillStyle = '#f97316'; ctx.fillRect(0, H * 0.62, W, H * 0.09);
-    ctx.fillStyle = '#26282e'; ctx.font = `bold ${Math.floor(H * 0.16)}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.fillText('NONAME FITNESS', W / 4, H * 0.4);
-    ctx.fillText('NONAME FITNESS', W * 3 / 4, H * 0.4);
+    drawNonameLogo(ctx, W / 4, H * 0.36, W * 0.32);
+    drawNonameLogo(ctx, W * 3 / 4, H * 0.36, W * 0.32);
     ctx.font = `bold ${Math.floor(H * 0.09)}px sans-serif`;
-    ctx.fillStyle = '#f97316';
-    ctx.fillText('WELCOME 💪', W / 4, H * 0.55);
-    ctx.fillText('WELCOME 💪', W * 3 / 4, H * 0.55);
+    ctx.fillStyle = '#f97316'; ctx.textAlign = 'center';
+    ctx.fillText('WELCOME 💪', W / 4, H * 0.58);
+    ctx.fillText('WELCOME 💪', W * 3 / 4, H * 0.58);
     ctx.textAlign = 'left';
     neonStrip(ctx, 0, 0, W, H * 0.06);
   };
