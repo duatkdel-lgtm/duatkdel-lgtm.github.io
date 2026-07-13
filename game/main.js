@@ -540,6 +540,62 @@ function plantPot(x, z) {
   colliders.push({ x1: x - 0.25, z1: z - 0.25, x2: x + 0.25, z2: z + 0.25 });
 }
 
+// 러닝머신: 칠할 수 있는 데크 + 연두 레일 + 콘솔(파란 화면). 앞쪽(-Z)이 창가 방향
+function makeTreadmill(cx, cz) {
+  makePaintBox(cx, cz, 0.85, 1.9, 0.26, 70, {
+    top: true,
+    paint(surf) {
+      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
+      ctx.fillStyle = '#141518'; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#b5e341';
+      ctx.fillRect(0, H * 0.42, W, 5); ctx.fillRect(0, H - 5, W, 5);
+      ctx.fillStyle = '#0a0b0d'; ctx.fillRect(W * 0.06, H * 0.48, W * 0.88, H * 0.48);
+      ctx.fillStyle = 'rgba(255,255,255,.07)';
+      for (let y = H * 0.52; y < H - 4; y += 9) ctx.fillRect(W * 0.06, y, W * 0.88, 2);
+    },
+  });
+  const dark = new THREE.MeshLambertMaterial({ color: 0x1c1e23 });
+  const lime = new THREE.MeshLambertMaterial({ color: 0x9fc93c });
+  const zF = cz - 0.78;
+  [-0.36, 0.36].forEach((ox) => {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.07, 1.05, 0.07), dark);
+    post.position.set(cx + ox, 0.78, zF);
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.055, 1.0), lime);
+    rail.position.set(cx + ox, 1.0, zF + 0.55);
+    decorGroup.add(post, rail);
+    solidMeshes.push(post, rail);
+  });
+  const consoleBox = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.5, 0.09), dark);
+  consoleBox.position.set(cx, 1.42, zF); consoleBox.rotation.x = -0.25;
+  const screen = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.28, 0.02),
+    new THREE.MeshBasicMaterial({ color: 0x2f9edb }));
+  screen.position.set(cx, 1.44, zF + 0.06); screen.rotation.x = -0.25;
+  decorGroup.add(consoleBox, screen);
+  solidMeshes.push(consoleBox);
+}
+// 스핀바이크: 플라이휠(보라) + 안장 + 핸들바
+function makeSpinBike(cx, cz) {
+  const dark = new THREE.MeshLambertMaterial({ color: 0x1a1b20 });
+  const purple = new THREE.MeshLambertMaterial({ color: 0x7c3aed });
+  const parts = [];
+  const add = (geo, x, y, z, rx = 0, rz = 0, mat = dark) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z); m.rotation.x = rx; m.rotation.z = rz;
+    parts.push(m);
+    return m;
+  };
+  add(new THREE.BoxGeometry(0.48, 0.07, 0.12), cx, 0.05, cz - 0.4);
+  add(new THREE.BoxGeometry(0.48, 0.07, 0.12), cx, 0.05, cz + 0.4);
+  add(new THREE.BoxGeometry(0.09, 0.09, 0.95), cx, 0.5, cz, 0.45);
+  const wheel = add(new THREE.CylinderGeometry(0.3, 0.3, 0.06, 14), cx, 0.42, cz - 0.3, 0, Math.PI / 2, purple);
+  add(new THREE.BoxGeometry(0.06, 0.42, 0.06), cx, 0.85, cz + 0.32);
+  add(new THREE.BoxGeometry(0.24, 0.07, 0.3), cx, 1.08, cz + 0.32);            // 안장
+  add(new THREE.BoxGeometry(0.06, 0.5, 0.06), cx, 0.92, cz - 0.3);
+  add(new THREE.BoxGeometry(0.44, 0.07, 0.14), cx, 1.2, cz - 0.3);             // 핸들바
+  parts.forEach((m) => { decorGroup.add(m); solidMeshes.push(m); });
+  colliders.push({ x1: cx - 0.26, z1: cz - 0.52, x2: cx + 0.26, z2: cz + 0.52 });
+}
+
 function buildGymMap() {
   ARENA_X = GYM_X; ARENA_Z = GYM_Z;
   SPAWN = { x: 19.5, z: 6.5, yaw: Math.PI / 2 };   // 정문에서 홀 안쪽을 바라봄
@@ -843,31 +899,12 @@ function buildGymMap() {
   };
   [[-3, -5], [0.5, -5], [4, -5], [-3, 5], [0.5, 5], [4, 5]].forEach(([mx, mz]) =>
     makePaintBox(mx, mz, 1.1, 1.5, 1.6, 60, machinePaint));
-  // 러닝머신 6 (2열, 연두 포인트)
-  const tmPaint = {
-    top: true,
-    paint(surf) {
-      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
-      ctx.fillStyle = '#131418'; ctx.fillRect(0, 0, W, H);
-      ctx.fillStyle = '#b5e341';
-      ctx.fillRect(0, H * 0.1, W, 6); ctx.fillRect(0, H * 0.8, W, 6);
-      ctx.fillStyle = '#0a0b0d'; ctx.fillRect(W * 0.3, H * 0.3, W * 0.4, H * 0.35);
-      ctx.fillStyle = '#38bdf8'; ctx.fillRect(W * 0.42, H * 0.38, W * 0.16, H * 0.18);
-    },
-  };
-  [[8.5, -6.5], [10.5, -6.5], [12.5, -6.5], [8.5, -3.5], [10.5, -3.5], [12.5, -3.5]].forEach(([mx, mz]) =>
-    makePaintBox(mx, mz, 0.9, 1.9, 1.35, 62, tmPaint));
-  // 스핀바이크 5 (스피닝룸 안)
-  const bikePaint = {
-    top: false,
-    paint(surf) {
-      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
-      ctx.fillStyle = '#151318'; ctx.fillRect(0, 0, W, H);
-      ctx.fillStyle = '#7c3aed'; ctx.fillRect(0, H * 0.3, W, 8);
-    },
-  };
-  [[17, -8.5], [19, -8.5], [21, -8.5], [18, -5.8], [20, -5.8]].forEach(([mx, mz]) =>
-    makePaintBox(mx, mz, 0.5, 1.15, 1.1, 70, bikePaint));
+  // 러닝머신 8 (2열, 창가를 바라봄) — 데크+레일+콘솔이 있는 진짜 형태
+  [[7.5, -6.8], [9.3, -6.8], [11.1, -6.8], [12.9, -6.8],
+   [7.5, -3.6], [9.3, -3.6], [11.1, -3.6], [12.9, -3.6]].forEach(([mx, mz]) => makeTreadmill(mx, mz));
+  // 스핀바이크 6 (스피닝룸 안) — 플라이휠+안장+핸들바
+  [[16.8, -8.4], [18.6, -8.4], [20.4, -8.4], [16.8, -5.6], [18.6, -5.6], [20.4, -5.6]].forEach(([mx, mz]) =>
+    makeSpinBike(mx, mz));
   // 인포메이션 카운터 (우드)
   makePaintBox(16.5, 1.5, 2.6, 1, 1.1, 60, {
     top: true,
