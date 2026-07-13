@@ -50,6 +50,17 @@
   #howto { margin-top:22px; max-width:640px; font-size:15.5px; line-height:1.75; color:#cbd5e1;
     background:rgba(0,0,0,.35); border-radius:16px; padding:16px 22px; }
 
+  /* ---------- 온라인 ---------- */
+  #onlineRow { display:flex; gap:10px; align-items:center; margin-top:16px; flex-wrap:wrap; justify-content:center; }
+  #onlineRow input { border:none; border-radius:12px; padding:12px 14px; font-size:18px; font-weight:800;
+    background:rgba(255,255,255,.12); color:#fff; width:110px; text-align:center; -webkit-user-select:text; user-select:text; }
+  #joinCode { text-transform:uppercase; letter-spacing:4px; width:100px; }
+  .onlineNote { margin-top:10px; font-size:14px; color:#7dd3fc; }
+  #lobby, #waitPanel { background:rgba(4,6,14,.94); z-index:75; }
+  #lobbyCode { font-size:56px; font-weight:900; color:#fde047; letter-spacing:14px; margin:10px 0 4px; }
+  #lobbyList { background:rgba(255,255,255,.07); border-radius:16px; padding:16px 34px; margin:16px 0;
+    font-size:20px; font-weight:800; line-height:2; min-width:260px; }
+
   /* ---------- 핸드오프 ---------- */
   #handoff { background:#05070f; z-index:70; }
   #handoff .who { font-size:44px; font-weight:900; margin:10px 0 6px; }
@@ -195,13 +206,40 @@
         <button data-v="easy">연하게</button><button data-v="normal" class="on">보통</button><button data-v="hard">진하게</button>
       </div></div>
   </div>
-  <button class="btn" id="startBtn">게임 시작 ▶</button>
+  <button class="btn" id="startBtn">게임 시작 ▶ (한 기기)</button>
+  <div id="onlineRow">
+    <button class="btn blue small" id="hostBtn">🌐 방 만들기</button>
+    <input id="joinCode" maxlength="4" placeholder="코드" autocapitalize="characters" autocomplete="off">
+    <button class="btn small" id="joinBtn">참가</button>
+    <input id="myName" maxlength="8" placeholder="내 이름" autocomplete="off">
+  </div>
+  <div class="onlineNote">🌐 온라인: 각자 기기로 같은 와이파이에서! 방 코드만 공유하면 끝</div>
   <div id="howto">
     <b>🎮 방법</b> — <b style="color:#60a5fa">B팀(숨기)</b>: 새하얀 3D 젤리맨이 되어 맵을 돌아다니다, 원하는 벽·바닥·상자에 붙은 뒤 <b>내 몸에 직접 그림을 그리고</b> 🤸 <b>자세</b>(프리셋 7종 + 팔다리를 잡고 드래그하면 자유 변형, 몸통 드래그 = 회전)를 잡아 배경과 똑같이 위장해요 (💉 스포이드로 주변 색 추출!). 내 모습·자세를 복사한 가짜 3개로 술래를 속일 수도!
     <b style="color:#f87171">A팀(술래)</b>: 기기를 넘겨받아 <b>🔫 샷건</b>으로 진짜 젤리맨을 쏘세요! 가까이서 쏠수록 명중. <b>빗나간 총알은 영영 소모</b>되고, 총알이 다 떨어지면 숨는 팀 승리! 진짜는 아주 가끔 <b>숨을 쉬어요</b>(몸이 살짝 부풀었다 꺼짐)…👀 라운드마다 역할이 바뀝니다.<br>
     <span style="color:#a7f3d0">✏️ Apple Pencil 필압으로 굵기 조절 · 칠은 내 몸에만! (벽 색은 💉 스포이드로 추출) · 두 손가락 = 회전/확대 · ↩️ 되돌리기</span><br>
     <span style="color:#93c5fd">🖥️ PC: WASD 이동 · 마우스 드래그 시점 · 클릭/스페이스 = 발사 · 휠 = 확대 (그리기 중 우클릭 드래그 = 시점)</span>
   </div>
+</div>
+
+<!-- 온라인 로비 -->
+<div id="lobby" class="overlay hidden">
+  <div style="font-size:30px;font-weight:900">🌐 온라인 로비</div>
+  <div id="lobbyCode"></div>
+  <div class="desc" style="color:#94a3b8">같은 와이파이의 다른 기기에서 이 코드로 참가하세요</div>
+  <div id="lobbyList"></div>
+  <div style="display:flex;gap:12px;margin-top:8px">
+    <button class="btn hidden" id="lobbyStart">게임 시작 ▶</button>
+    <button class="btn red small" id="lobbyLeave">나가기</button>
+  </div>
+  <div class="desc" id="lobbyNote" style="margin-top:14px"></div>
+</div>
+
+<!-- 온라인 대기 -->
+<div id="waitPanel" class="overlay hidden">
+  <div style="font-size:64px" id="waitEmoji">⏳</div>
+  <div style="font-size:36px;font-weight:900;margin:12px 0" id="waitTitle">기다리는 중…</div>
+  <div class="desc" id="waitDesc" style="max-width:560px"></div>
 </div>
 
 <!-- 핸드오프 -->
@@ -284,6 +322,7 @@
 <div id="toast"></div>
 <div id="hint" class="hidden"></div>
 
+<script src="./lib/peerjs.min.js"></script>
 <script type="importmap">{ "imports": { "three": "./lib/three.module.js" } }</script>
 <script type="module" src="./main.js"></script>
 </body>

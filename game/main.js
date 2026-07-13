@@ -8,7 +8,18 @@ import * as THREE from 'three';
 // ---------------- 유틸 ----------------
 const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-const rand = (a, b) => a + Math.random() * (b - a);
+// 시드 난수(mulberry32) — 온라인에서 모든 기기가 같은 맵을 생성하기 위함
+let rngState = (Math.random() * 4294967296) >>> 0;
+function seedRng(x) { rngState = x >>> 0; }
+function srng() {
+  rngState = (rngState + 0x6D2B79F5) >>> 0;
+  let t = rngState;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+const newSeed = () => (Math.random() * 4294967296) >>> 0;
+const rand = (a, b) => a + srng() * (b - a);
 const randi = (a, b) => Math.floor(rand(a, b + 1));
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
@@ -364,6 +375,7 @@ function cratePainter(kind) {
 }
 
 function buildMap() {
+  seedRng(game.mapSeed);
   clearMap();
   if (game.map === 'gym') buildGymMap();
   else buildTownMap();
@@ -1185,6 +1197,8 @@ const game = {
   rounds: 4, round: 1, difficulty: 'normal',
   map: 'town',             // 'town' | 'gym'(노네임피트니스)
   partyN: 0,               // 0 = 2팀 대전, 3~6 = 파티 인원
+  online: false,           // 온라인(각자 기기) 모드
+  mapSeed: (Math.random() * 4294967296) >>> 0,
   scores: [],              // 파티 개인 점수
   seekerIdx: 0,            // 이번 라운드 술래(파티)
   hiderQueue: [], subIdx: 0,
@@ -1247,8 +1261,11 @@ segWire('segDiff', (v) => { game.difficulty = v; });
 segWire('segTime', (v) => { game.hideTime = parseInt(v, 10); });
 segWire('segMode', (v) => { game.partyN = v === 'duo' ? 0 : parseInt(v, 10); });
 const P_COLORS = ['🔴', '🔵', '🟢', '🟡', '🟣', '🟠'];
-function pName(i) { return `${P_COLORS[i % 6]} P${i + 1}`; }
-function isParty() { return game.partyN >= 3; }
+function pName(i) {
+  const nm = (game.online && net && net.names[i]) ? net.names[i] : `P${i + 1}`;
+  return `${P_COLORS[i % 6]} ${nm}`;
+}
+function isParty() { return game.partyN >= 3 || (game.online && game.partyN >= 2); }
 function setupPartyRound() {
   game.seekerIdx = game.round - 1;
   game.hiderQueue = [...Array(game.partyN).keys()].filter((i) => i !== game.seekerIdx);
@@ -1821,6 +1838,7 @@ function shoot() {
 function catchJelly(e) {
   e.found = true;
   game.catches++;
+  if (game.online) netSend({ t: 'catch', owner: e.owner, catches: game.catches, total: game.hiddenList.length });
   const s = e.jelly.surface, ctx = s.ctx, W = s.canvas.width, H = s.canvas.height;
   ctx.save();
   ctx.fillStyle = 'rgba(220,38,38,.25)'; ctx.fillRect(0, 0, W, H);
@@ -1987,6 +2005,10 @@ $('readyBtn').addEventListener('click', () => {
 });
 // 현재 숨는 사람 확정 → 다음 사람 or 술래
 function finalizeHider() {
+  if (game.online) {
+    netSubmitHidden();
+    return;
+  }
   const entry = { jelly: game.cham, owner: isParty() ? game.hiderQueue[game.subIdx] : -1, found: false, nextBlink: 0, breathUntil: 0 };
   if (isParty()) {
     game.hiddenList.push(entry);
@@ -2001,6 +2023,7 @@ function finalizeHider() {
 $('exitBtn').addEventListener('click', () => {
   sfx.click();
   openConfirm('🏠 게임을 끝내고 메뉴로 나갈까요?', window.innerWidth / 2, window.innerHeight / 2, () => {
+    netCleanup();
     game.state = 'menu';
     game.editCam = false;
     show('walkBtn', false); show('posePanel', false);
@@ -2043,6 +2066,7 @@ function startHandoff(next) {
 
 function beginHide() {
   show('handoff', false);
+  if (!game.online && (!isParty() || game.subIdx === 0)) game.mapSeed = newSeed();
   if (!isParty() || game.subIdx === 0) buildMap();   // 파티: 같은 라운드에선 맵 유지
   // 내 젤리맨(새하얀 몸) 생성 — 배치 전까지 플레이어를 따라다님(3인칭)
   game.cham = buildJelly(DIFF[game.difficulty].sizeScale);
@@ -2135,7 +2159,13 @@ function endRound(seekerWon) {
   camera.position.copy(camPos);
   camera.lookAt(focus.worldPos);
 
-  if (isParty()) {
+  if (game.online) {
+    // 술래 기기: 결과를 호스트로 보내고 호스트가 점수 계산·배포
+    netSend({ t: 'roundEnd', owners: list.map((h) => h.owner), found: list.map((h) => !!h.found), catches: game.catches });
+    revealFound = game.catches === k;
+    if (revealFound) { sfx.found(); toast('🏆 전원 검거!', 2000); }
+    else { sfx.survive(); toast(`🕴️ ${k - game.catches}명 생존!`, 2000); }
+  } else if (isParty()) {
     // 생존자 +2점, 술래는 잡은 만큼 + 전원 검거 보너스 +2
     list.forEach((h) => { if (!h.found) game.scores[h.owner] += 2; });
     game.scores[game.seekerIdx] += game.catches + (game.catches === k ? 2 : 0);
@@ -2154,7 +2184,17 @@ function endRound(seekerWon) {
 }
 let revealFound = false;
 function showResult() {
+  if (game.online) {
+    // 술래: 호스트 결과 수신 대기 (보통 즉시 도착)
+    if (net && net.lastResult) netShowResult(net.lastResult);
+    else {
+      showWait('📊', '결과 집계 중…');
+      game.state = 'netwait';
+    }
+    return;
+  }
   game.state = 'result';
+  show('resBtn', true);
   const found = revealFound;
   const board = document.querySelector('#result .scoreboard');
   if (isParty()) {
@@ -2182,6 +2222,11 @@ function showResult() {
 $('resBtn').addEventListener('click', () => {
   sfx.click();
   show('result', false);
+  if (game.online) {
+    if (net.lastResult && net.lastResult.final) { showGameover(); return; }
+    if (net.isHost) { game.round++; hostStartRound(); }
+    return;
+  }
   if (game.round >= game.rounds) { showGameover(); return; }
   game.round++;
   if (isParty()) setupPartyRound();
@@ -2210,6 +2255,7 @@ function showGameover() {
 $('goBtn').addEventListener('click', () => {
   sfx.click();
   show('gameover', false);
+  netCleanup();
   show('menu', true);
   game.state = 'menu';
 });
@@ -2228,6 +2274,319 @@ $('startBtn').addEventListener('click', () => {
   startHandoff('hide');
 });
 
+// ================================================================
+//  🌐 온라인 멀티 (PeerJS P2P) — 각자 기기, 방 코드 4자리
+//  호스트 = 중계 + 점수 계산. 같은 와이파이면 기기 직결(서버 불필요)
+// ================================================================
+let net = null;   // { peer, isHost, conns[], code, myIdx, names[], jellies[], lastResult }
+const NET_PREFIX = 'jellyman-nnf-';
+
+function myName() {
+  const v = ($('myName').value || '').trim().slice(0, 8);
+  return v || null;
+}
+function makeCode() {
+  const cs = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  let c = '';
+  for (let i = 0; i < 4; i++) c += cs[Math.floor(Math.random() * cs.length)];
+  return c;
+}
+// 시그널링 서버 옵션 (?peerhost=...&peerport=... 로 자체 서버 사용 가능, 기본은 PeerJS 클라우드)
+function peerOpts() {
+  const q = new URLSearchParams(location.search);
+  const o = { debug: 0 };
+  if (q.get('peerhost')) {
+    o.host = q.get('peerhost');
+    o.port = parseInt(q.get('peerport') || '9000', 10);
+    o.path = '/';
+    o.secure = q.get('peersecure') === '1';
+  }
+  return o;
+}
+function netCleanup() {
+  if (net) { try { net.peer.destroy(); } catch (e) {} }
+  net = null;
+  game.online = false;
+  show('lobby', false); show('waitPanel', false);
+}
+function showWait(emoji, desc, title) {
+  $('waitEmoji').textContent = emoji;
+  $('waitTitle').textContent = title || '기다리는 중…';
+  $('waitDesc').innerHTML = desc;
+  show('waitPanel', true);
+}
+function netSend(m) {
+  if (!net) return;
+  if (net.isHost) hostOnData(null, m, net.myIdx);
+  else net.hostConn.send(m);
+}
+function broadcast(m) {
+  net.conns.forEach((c) => { try { c.send(m); } catch (e) {} });
+}
+
+// ---------- 방 만들기 / 참가 ----------
+$('hostBtn').addEventListener('click', () => {
+  if (typeof Peer === 'undefined') { toast('네트워크 모듈 로드 실패', 2000); return; }
+  ac(); sfx.click();
+  netCleanup();
+  const code = makeCode();
+  const peer = new Peer(NET_PREFIX + code, peerOpts());
+  net = { peer, isHost: true, conns: [], code, myIdx: 0, names: [myName() || '방장'], jellies: [], submitted: [], lastResult: null };
+  $('lobbyCode').textContent = '……';
+  show('menu', false); show('lobby', true);
+  $('lobbyNote').textContent = '연결 준비 중…';
+  peer.on('open', () => { updateLobbyUI(); $('lobbyNote').textContent = ''; });
+  peer.on('connection', (conn) => {
+    conn.on('open', () => {
+      conn._idx = net.names.length;
+      net.conns.push(conn);
+      net.names.push('...');
+      conn.on('data', (m) => hostOnData(conn, m, conn._idx));
+      conn.on('close', () => {
+        toast(`${pName(conn._idx)} 나감`, 1500);
+      });
+    });
+  });
+  peer.on('error', (e) => { $('lobbyNote').textContent = '오류: ' + e.type + ' (인터넷 연결 확인)'; });
+});
+$('joinBtn').addEventListener('click', () => {
+  if (typeof Peer === 'undefined') { toast('네트워크 모듈 로드 실패', 2000); return; }
+  const code = ($('joinCode').value || '').trim().toUpperCase();
+  if (code.length !== 4) { toast('4자리 방 코드를 입력하세요', 1500); return; }
+  ac(); sfx.click();
+  netCleanup();
+  const peer = new Peer(peerOpts());
+  show('menu', false);
+  showWait('🌐', `방 <b>${code}</b>에 연결 중…`);
+  peer.on('open', () => {
+    const conn = peer.connect(NET_PREFIX + code, { reliable: true });
+    net = { peer, isHost: false, hostConn: conn, code, myIdx: -1, names: [], lastResult: null };
+    conn.on('open', () => {
+      conn.send({ t: 'join', name: myName() });
+      show('waitPanel', false); show('lobby', true);
+      $('lobbyCode').textContent = code;
+    });
+    conn.on('data', (m) => guestOnData(m));
+    conn.on('close', () => { toast('방장과 연결이 끊겼어요', 2500); netCleanup(); show('menu', true); game.state = 'menu'; });
+  });
+  peer.on('error', (e) => {
+    showWait('❌', '방을 찾을 수 없어요. 코드를 확인하세요.<br><br>', '연결 실패');
+    setTimeout(() => { netCleanup(); show('menu', true); }, 2200);
+  });
+});
+$('lobbyLeave').addEventListener('click', () => { sfx.click(); netCleanup(); show('menu', true); game.state = 'menu'; });
+$('lobbyStart').addEventListener('click', () => {
+  if (net.names.length < 2) { toast('2명 이상 필요해요', 1500); return; }
+  sfx.click();
+  game.round = 1;
+  hostStartRound();
+});
+
+function updateLobbyUI() {
+  if (!net) return;
+  $('lobbyCode').textContent = net.code;
+  $('lobbyList').innerHTML = net.names.map((n, i) =>
+    `${P_COLORS[i % 6]} ${n}${i === 0 ? ' 👑' : ''}${i === net.myIdx ? ' <span style="color:#4ade80">← 나</span>' : ''}`).join('<br>');
+  show('lobbyStart', net.isHost && net.names.length >= 2);
+  if (net.isHost) $('lobbyNote').textContent = net.names.length < 2 ? '참가자를 기다리는 중…' : '';
+  else $('lobbyNote').textContent = '방장이 시작하길 기다리는 중…';
+}
+
+// ---------- 호스트 로직 ----------
+function hostOnData(conn, m, fromIdx) {
+  if (m.t === 'join') {
+    net.names[conn._idx] = (m.name || `젤리${conn._idx + 1}`);
+    sendLobby();
+    return;
+  }
+  if (m.t === 'hidden') {
+    net.jellies[m.idx] = m.payload;
+    net.submitted[m.idx] = true;
+    const need = net.names.length - 1;
+    const done = net.submitted.filter(Boolean).length;
+    broadcast({ t: 'progress', done, need });
+    onProgress(done, need);
+    if (done >= need) hostAllHidden();
+    return;
+  }
+  if (m.t === 'catch') { broadcast({ t: 'feed', owner: m.owner, catches: m.catches, total: m.total }); onFeed(m); return; }
+  if (m.t === 'roundEnd') { hostFinishRound(m); return; }
+}
+function sendLobby() {
+  net.conns.forEach((c) => c.send({ t: 'lobby', names: net.names, you: c._idx }));
+  updateLobbyUI();
+}
+function hostStartRound() {
+  net.submitted = []; net.jellies = []; net.lastResult = null;
+  const msg = {
+    t: 'start', seed: newSeed(), round: game.round,
+    names: net.names,
+    settings: { map: game.map, hideTime: game.hideTime, difficulty: game.difficulty },
+  };
+  broadcast(msg);
+  netStartRound(msg);
+}
+function hostAllHidden() {
+  const jellies = [];
+  net.jellies.forEach((p, idx) => { if (p) jellies.push({ owner: idx, ...p }); });
+  broadcast({ t: 'seek', jellies });
+  if (net.myIdx === game.seekerIdx) netBeginSeek(jellies);
+  else showWait('🔫', `술래 ${pName(game.seekerIdx)}가 찾는 중…<br><span id="feedLine" style="color:#94a3b8"></span>`, '사냥 시작!');
+}
+function hostFinishRound(m) {
+  const N = net.names.length, k = m.found.length;
+  const caught = m.found.filter(Boolean).length;
+  m.owners.forEach((o, i) => { if (!m.found[i]) game.scores[o] += 2; });
+  game.scores[game.seekerIdx] += caught + (caught === k ? 2 : 0);
+  const res = {
+    t: 'result', scores: game.scores.slice(), owners: m.owners, found: m.found,
+    catches: caught, seeker: game.seekerIdx, round: game.round,
+    final: game.round >= N,
+  };
+  broadcast(res);
+  net.lastResult = res;
+  if (net.myIdx !== game.seekerIdx) netShowResult(res);   // 술래(호스트)는 공개 연출 후 표시
+}
+
+// ---------- 게스트 로직 ----------
+function guestOnData(m) {
+  if (m.t === 'lobby') { net.myIdx = m.you; net.names = m.names; updateLobbyUI(); return; }
+  if (m.t === 'start') { netStartRound(m); return; }
+  if (m.t === 'progress') { onProgress(m.done, m.need); return; }
+  if (m.t === 'seek') {
+    if (net.myIdx === game.seekerIdx) netBeginSeek(m.jellies);
+    else showWait('🔫', `술래 ${pName(game.seekerIdx)}가 찾는 중…<br><span id="feedLine" style="color:#94a3b8"></span>`, '사냥 시작!');
+    return;
+  }
+  if (m.t === 'feed') { onFeed(m); return; }
+  if (m.t === 'result') {
+    net.lastResult = m;
+    // 술래는 공개 연출(reveal)이 끝난 뒤 showResult가 집어감
+    if (!(net.myIdx === game.seekerIdx && game.state === 'reveal')) netShowResult(m);
+    return;
+  }
+}
+function onProgress(done, need) {
+  if (game.state === 'netwait' && net.myIdx === game.seekerIdx) {
+    showWait('🔍', `다른 젤리맨들이 숨는 중… <b>${done}/${need}</b>`, '당신이 술래!');
+  }
+}
+function onFeed(m) {
+  const el = document.getElementById('feedLine');
+  if (el) el.innerHTML += `🎯 ${pName(m.owner)} 발견! (${m.catches}/${m.total})<br>`;
+  if (game.state === 'netwait') sfx.wrong();
+}
+
+// ---------- 라운드 시작 (모든 기기) ----------
+function netStartRound(m) {
+  game.online = true;
+  net.names = m.names;
+  net.lastResult = null;
+  game.partyN = net.names.length;
+  game.rounds = net.names.length;
+  game.round = m.round;
+  if (m.round === 1) game.scores = new Array(game.partyN).fill(0);
+  game.map = m.settings.map;
+  game.hideTime = m.settings.hideTime;
+  game.difficulty = m.settings.difficulty;
+  game.mapSeed = m.seed;
+  game.seekerIdx = m.round - 1;
+  game.hiddenList = []; game.catches = 0;
+  show('lobby', false); show('result', false); show('waitPanel', false);
+  closeConfirm();
+  if (net.myIdx === game.seekerIdx) {
+    buildMap();
+    game.state = 'netwait';
+    setPhaseUI();
+    showWait('🔍', `다른 젤리맨들이 숨는 중… <b>0/${game.partyN - 1}</b>`, '당신이 술래!');
+  } else {
+    game.hiderQueue = [net.myIdx];
+    game.subIdx = 0;
+    beginHide();
+    toast(`🔍 이번 술래: ${pName(game.seekerIdx)} — 들키지 마세요!`, 2600);
+  }
+}
+
+// ---------- 젤리맨 직렬화 / 복원 ----------
+function serializeAttach(j) {
+  return {
+    p: j.worldPos.toArray(), n: j.normal.toArray(), q: j.qBasis.toArray(),
+    roll: j.customRoll, pose: j.pose,
+    limbs: ['armL', 'armR', 'legL', 'legR'].map((k) => j[k].rotation.z),
+    scale: j.baseScale,
+  };
+}
+function netSubmitHidden() {
+  const payload = {
+    a: serializeAttach(game.cham),
+    tex: game.cham.surface.canvas.toDataURL('image/jpeg', 0.72),
+    decoys: game.decoys.map((d) => serializeAttach(d)),
+  };
+  // 편집 UI 정리
+  game.editCam = false; game.paintMode = false;
+  show('walkBtn', false); show('posePanel', false); show('paintbar', false); show('readyBtn', false);
+  $('poseBtn').classList.remove('on');
+  game.state = 'netwait';
+  setPhaseUI();
+  showWait('✅', `제출 완료! 다른 젤리맨들을 기다리는 중…<br><span id="feedLine" style="color:#94a3b8"></span>`, '위장 완료!');
+  netSend({ t: 'hidden', idx: net.myIdx, payload });
+}
+function spawnRemoteJelly(a, tex, role) {
+  const j = buildJelly(a.scale);
+  j.group.traverse((o) => { o.userData.chamRole = role; });
+  applyPose(j, a.pose);
+  ['armL', 'armR', 'legL', 'legR'].forEach((k, i) => { j[k].rotation.z = a.limbs[i]; });
+  j.customRoll = a.roll;
+  j.worldPos.fromArray(a.p);
+  j.normal.fromArray(a.n);
+  j.qBasis = new THREE.Quaternion().fromArray(a.q);
+  applyAttachOrientation(j);
+  const img = new Image();
+  img.onload = () => {
+    j.surface.ctx.drawImage(img, 0, 0, j.surface.canvas.width, j.surface.canvas.height);
+    j.surface.texture.needsUpdate = true;
+  };
+  img.src = tex;
+  return j;
+}
+function netBeginSeek(jellies) {
+  show('waitPanel', false);
+  if (!decorGroup || game.state !== 'netwait') buildMap();
+  game.hiddenList = jellies.map((pl) => ({
+    jelly: spawnRemoteJelly(pl.a, pl.tex, 'real'),
+    owner: pl.owner, found: false, nextBlink: 0, breathUntil: 0,
+  }));
+  jellies.forEach((pl) => pl.decoys.forEach((d) => spawnRemoteJelly(d, pl.tex, 'decoy')));
+  beginSeek();
+}
+// 온라인 결과 표시 (호스트가 배포)
+function netShowResult(m) {
+  game.scores = m.scores.slice();
+  game.catches = m.catches;
+  show('waitPanel', false); show('handoff', false);
+  game.state = 'result';
+  const k = m.found.length;
+  $('resBig').textContent = m.catches === k ? '🏆 전원 검거!' : `🕴️ ${k - m.catches}명 생존!`;
+  const surv = m.owners.filter((o, i) => !m.found[i]).map((o) => pName(o)).join(', ');
+  const standing = m.scores.map((v, i) => ({ i, v })).sort((a, b) => b.v - a.v)
+    .map((x) => `${pName(x.i)} ${x.v}점`).join(' · ');
+  $('resDesc').innerHTML = `라운드 ${m.round}/${game.rounds} — 술래 ${pName(m.seeker)}: ${m.catches}/${k} 검거` +
+    (surv ? `<br>생존: ${surv}` : '') +
+    `<br><span style="color:#94a3b8">${standing}</span>`;
+  document.querySelector('#result .scoreboard').style.display = 'none';
+  if (m.final) {
+    $('resBtn').textContent = '최종 결과 보기 🏁';
+    show('resBtn', true);
+  } else if (net.isHost) {
+    $('resBtn').textContent = '다음 라운드 ▶';
+    show('resBtn', true);
+  } else {
+    show('resBtn', false);
+    $('resDesc').innerHTML += '<br><span style="color:#64748b">방장이 다음 라운드를 시작합니다…</span>';
+  }
+  show('result', true);
+}
+
 // ---------------- 메인 루프 ----------------
 buildMap();   // 메뉴 배경용
 camera.position.set(0, 10, 26);
@@ -2244,7 +2603,7 @@ function animate() {
 
   if (!(st === 'hide' && game.editCam)) camera.up.set(0, 1, 0);   // 편집 뷰 외에는 기본 업벡터
 
-  if (st === 'menu' || st === 'handoff' || st === 'result' || st === 'gameover') {
+  if (st === 'menu' || st === 'handoff' || st === 'result' || st === 'gameover' || st === 'netwait') {
     // 회전 데모 카메라
     menuAngle += dt * 0.1;
     if (game.map === 'gym') {
