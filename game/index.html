@@ -121,6 +121,17 @@
   #colorPicker::-webkit-color-swatch { border:none; border-radius:10px; }
 
   /* ---------- 자세 팔레트 ---------- */
+  #nudgePad { position:absolute; left:calc(14px + env(safe-area-inset-left)); top:50%; transform:translateY(-50%);
+    display:grid; grid-template-columns:54px 54px 54px; grid-template-rows:54px 54px 54px 20px; gap:5px;
+    pointer-events:auto; }
+  #nudgePad button { border:1.5px solid rgba(255,255,255,.14); border-radius:15px; background:rgba(8,12,24,.8);
+    color:#fff; font-size:21px; font-weight:800; backdrop-filter:blur(6px);
+    -webkit-tap-highlight-color:transparent; touch-action:none; -webkit-user-select:none; user-select:none; }
+  #nudgePad button:active { background:#2563eb; border-color:#60a5fa; }
+  #nudgePad .nCenter { display:flex; align-items:center; justify-content:center;
+    color:rgba(255,255,255,.5); font-size:19px; }
+  #nudgePad .nLabel { text-align:center; color:rgba(255,255,255,.75); font-size:12px; font-weight:800;
+    text-shadow:0 1px 3px rgba(0,0,0,.8); }
   #posePanel { position:absolute; left:50%; transform:translateX(-50%); bottom:calc(140px + env(safe-area-inset-bottom));
     display:flex; gap:8px; background:rgba(8,12,24,.92); border-radius:18px; padding:10px 12px;
     pointer-events:auto; flex-wrap:wrap; justify-content:center; max-width:92vw; backdrop-filter:blur(8px);
@@ -288,6 +299,14 @@
     <button class="act hidden" id="walkBtn"><span class="ico">🚶</span>걷기</button>
   </div>
   <div id="posePanel" class="hidden"></div>
+  <div id="nudgePad" class="hidden">
+    <button data-nx="0" data-ny="1" style="grid-column:2;grid-row:1">▲</button>
+    <button data-nx="-1" data-ny="0" style="grid-column:1;grid-row:2">◀</button>
+    <span class="nCenter" style="grid-column:2;grid-row:2">✥</span>
+    <button data-nx="1" data-ny="0" style="grid-column:3;grid-row:2">▶</button>
+    <button data-nx="0" data-ny="-1" style="grid-column:2;grid-row:3">▼</button>
+    <span class="nLabel" style="grid-column:1/4;grid-row:4">미세 이동</span>
+  </div>
   <button class="btn small hidden" id="readyBtn" disabled>✅ 다 숨었어요!</button>
 
   <div id="paintbar" class="hidden">

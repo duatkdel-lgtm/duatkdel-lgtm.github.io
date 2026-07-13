@@ -2714,6 +2714,67 @@ $('poseBtn').addEventListener('click', () => {
   if (open) updatePosePanelUI();
 });
 
+// ---------------- 미세 이동 (붙은 상태로 표면 위를 슬라이드) ----------------
+// dx: 화면 오른쪽+, dy: 화면 위+ (미터). 표면 밖이면 이동 취소, 모서리는 자동으로 넘어감
+const nudgeRay = new THREE.Raycaster();
+function nudgeJelly(dx, dy) {
+  const j = game.cham;
+  if (!j || !game.chamPlaced) return false;
+  // 화면 기준 방향 → 표면 접평면으로 투영 (카메라를 돌려놔도 화살표 방향 = 보이는 방향)
+  const camR = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+  const camU = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+  const proj = (v, fb) => {
+    const p = v.clone().addScaledVector(j.normal, -v.dot(j.normal));
+    return p.lengthSq() < 1e-4 ? fb.clone() : p.normalize();
+  };
+  const bx = new THREE.Vector3(1, 0, 0).applyQuaternion(j.qBasis);
+  const by = new THREE.Vector3(0, 1, 0).applyQuaternion(j.qBasis);
+  const right = proj(camR, bx), up = proj(camU, by);
+  const target = j.worldPos.clone().addScaledVector(right, dx).addScaledVector(up, dy);
+  // 목표 지점 위에서 표면으로 레이캐스트 → 실제 붙을 자리 확인
+  nudgeRay.set(target.clone().addScaledVector(j.normal, 0.3), j.normal.clone().negate());
+  nudgeRay.far = 0.6;
+  const hit = nudgeRay.intersectObjects(paintMeshes, false)
+    .find((h) => h.object.userData.surface && !h.object.userData.jelly);
+  if (!hit) return false;   // 표면 가장자리 밖
+  const n = worldNormalOf(hit);
+  if (n.dot(j.normal) < 0.985) {
+    // 다른 기울기의 면으로 넘어감: 머리 방향을 최대한 유지하며 기준축 재계산
+    const z = n.clone();
+    let u = by.clone().addScaledVector(z, -by.dot(z));
+    if (u.lengthSq() < 1e-4) u = bx.clone().addScaledVector(z, -bx.dot(z));
+    u.normalize();
+    const x = new THREE.Vector3().crossVectors(u, z).normalize();
+    const y = new THREE.Vector3().crossVectors(z, x).normalize();
+    j.qBasis = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+    j.normal.copy(n);
+  }
+  j.worldPos.copy(hit.point);
+  applyAttachOrientation(j);
+  return true;
+}
+// 패드: 누르면 한 칸, 누르고 있으면 부드럽게 슬라이드
+let nudgeTimer = null;
+document.querySelectorAll('#nudgePad button').forEach((b) => {
+  const nx = +b.dataset.nx, ny = +b.dataset.ny;
+  const stop = () => { if (nudgeTimer) { clearInterval(nudgeTimer); nudgeTimer = null; } };
+  b.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    try { b.setPointerCapture(e.pointerId); } catch (err) {}
+    stop();
+    if (nudgeJelly(nx * 0.02, ny * 0.02)) sfx.click();
+    nudgeTimer = setInterval(() => nudgeJelly(nx * 0.013, ny * 0.013), 40);
+  });
+  ['pointerup', 'pointercancel'].forEach((ev) => b.addEventListener(ev, stop));
+});
+// PC: 편집 뷰에서 방향키로도 미세 이동
+window.addEventListener('keydown', (e) => {
+  if (game.state !== 'hide' || !game.editCam || !game.chamPlaced) return;
+  const map = { ArrowUp: [0, 1], ArrowDown: [0, -1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
+  const d = map[e.code];
+  if (d) { e.preventDefault(); nudgeJelly(d[0] * 0.02, d[1] * 0.02); }
+});
+
 // ---------------- 편집 카메라 (붙은 뒤 벽 정면 고정 뷰) ----------------
 function enterEditCam(withPaint) {
   game.editCam = true;
@@ -2722,12 +2783,14 @@ function enterEditCam(withPaint) {
   $('previewTool').classList.remove('on');
   stickHide(); stickPtr = null;
   show('walkBtn', true);
+  show('nudgePad', true);
   if (withPaint) setPaintMode(true);
-  else setHint('드래그: 돌려보기 · 두 손가락: 이동/확대 · 팔다리 드래그: 자세 · 벽 탭: 이사');
+  else setHint('드래그: 돌려보기 · ✥패드: 미세 이동 · 팔다리 드래그: 자세 · 벽 탭: 이사');
 }
 function exitEditCam() {
   game.editCam = false;
   show('walkBtn', false);
+  show('nudgePad', false);
   show('posePanel', false);
   $('poseBtn').classList.remove('on');
   setPaintMode(false);
@@ -2767,7 +2830,7 @@ $('exitBtn').addEventListener('click', () => {
     netCleanup();
     game.state = 'menu';
     game.editCam = false;
-    show('walkBtn', false); show('posePanel', false);
+    show('walkBtn', false); show('posePanel', false); show('nudgePad', false);
     $('poseBtn').classList.remove('on');
     setPhaseUI(); stickHide(); pointers.clear(); stickPtr = null;
     setHint(''); setZoom(70);
@@ -2778,7 +2841,7 @@ $('exitBtn').addEventListener('click', () => {
 function startHandoff(next) {
   game.state = 'handoff';
   game.editCam = false;
-  show('walkBtn', false); show('posePanel', false);
+  show('walkBtn', false); show('posePanel', false); show('nudgePad', false);
   $('poseBtn').classList.remove('on');
   setPhaseUI(); stickHide(); pointers.clear(); stickPtr = null;
   closeConfirm(); setHint('');
@@ -3265,7 +3328,7 @@ function netSubmitHidden() {
   };
   // 편집 UI 정리
   game.editCam = false; game.paintMode = false;
-  show('walkBtn', false); show('posePanel', false); show('paintbar', false); show('readyBtn', false);
+  show('walkBtn', false); show('posePanel', false); show('paintbar', false); show('readyBtn', false); show('nudgePad', false);
   $('poseBtn').classList.remove('on');
   game.state = 'netwait';
   setPhaseUI();
