@@ -775,7 +775,7 @@ function setZoom(fov) {
 }
 window.addEventListener('wheel', (e) => {
   if (game.editCam && game.state === 'hide') {
-    game.editDist = clamp(game.editDist + e.deltaY * 0.003, 0.7, 5);
+    game.editDist = clamp(game.editDist + e.deltaY * 0.003, 0.55, 3.2);
   } else if ((game.state === 'hide' && game.paintMode) || game.state === 'seek') {
     setZoom(camera.fov + e.deltaY * 0.02);
   }
@@ -846,6 +846,7 @@ function placeChameleonAt(hit, isReal) {
     game.chamPlaced = true;
     game.hidden = game.cham;
     $('readyBtn').disabled = false;
+    $('paintModeBtn').style.opacity = 1;
     toast('🕴️ 붙었다! 바로 몸을 색칠하세요 (🚶 걷기로 나가기)', 2400);
     if (game.state === 'hide') enterEditCam(true);   // 벽 정면 편집 뷰 + 그리기 ON
   } else {
@@ -984,8 +985,8 @@ canvas.addEventListener('pointermove', (e) => {
     if (game.editCam && game.state === 'hide') {
       // 편집 뷰: 드래그 = 종이 옮기듯 화면 평행이동
       const k = game.editDist * 0.0016 * f;
-      game.editPanX = clamp(game.editPanX - dx * k, -3, 3);
-      game.editPanY = clamp(game.editPanY + dy * k, -2.2, 2.2);
+      game.editPanX = clamp(game.editPanX - dx * k, -1.3, 1.3);
+      game.editPanY = clamp(game.editPanY + dy * k, -1.0, 1.0);
     } else {
       player.yaw -= dx * 0.0038 * f;
       player.pitch = clamp(player.pitch - dy * 0.0032 * f, -1.15, 1.15);
@@ -996,7 +997,7 @@ canvas.addEventListener('pointermove', (e) => {
       if (o) {
         const prevDist = Math.hypot(prevX - o.lx, prevY - o.ly);
         const newDist = Math.hypot(e.clientX - o.lx, e.clientY - o.ly);
-        if (game.editCam) game.editDist = clamp(game.editDist + (newDist - prevDist) * -0.01, 0.7, 5);
+        if (game.editCam) game.editDist = clamp(game.editDist + (newDist - prevDist) * -0.01, 0.55, 3.2);
         else setZoom(camera.fov + (prevDist - newDist) * 0.12);
       }
     }
@@ -1223,7 +1224,13 @@ function setPaintModeQuiet(on) {
   show('readyBtn', !on && game.state === 'hide');
 }
 
-$('paintModeBtn').addEventListener('click', () => { sfx.click(); setPaintMode(!game.paintMode); });
+$('paintModeBtn').addEventListener('click', () => {
+  sfx.click();
+  // 그리기는 붙은 뒤 편집 뷰에서만 — 어정쩡한 3인칭 그리기 방지
+  if (!game.chamPlaced) { toast('👆 먼저 벽/바닥/상자를 탭해서 붙으세요!', 1600); return; }
+  if (!game.editCam) { enterEditCam(true); return; }
+  setPaintMode(!game.paintMode);
+});
 
 // ---------------- 자세 팔레트 (탭하면 그 자세로) ----------------
 {
@@ -1255,7 +1262,7 @@ $('poseBtn').addEventListener('click', () => {
 // ---------------- 편집 카메라 (붙은 뒤 벽 정면 고정 뷰) ----------------
 function enterEditCam(withPaint) {
   game.editCam = true;
-  game.editDist = 2.2; game.editPanX = 0; game.editPanY = 0;
+  game.editDist = 1.4; game.editPanX = 0; game.editPanY = 0;   // 몸이 화면에 꽉 차게
   stickHide(); stickPtr = null;
   show('walkBtn', true);
   if (withPaint) setPaintMode(true);
@@ -1329,6 +1336,7 @@ function beginHide() {
   $('decoyCount').textContent = '3';
   $('decoyBtn').disabled = false;
   $('readyBtn').disabled = true;
+  $('paintModeBtn').style.opacity = 0.4;   // 붙기 전엔 그리기 불가 표시
   player.reset(0, 18, 0);
   game.timer = game.hideTime;
   game.state = 'hide';
@@ -1500,10 +1508,10 @@ function animate() {
       m.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), player.yaw + Math.PI);
       const back = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw));
       camera.position.set(
-        player.pos.x + back.x * 2.9,
-        clamp(1.9 - player.pitch * 1.7, 0.5, 4.4),
-        player.pos.z + back.z * 2.9);
-      camera.lookAt(m.position.x, 0.7, m.position.z);
+        player.pos.x + back.x * 2.2,
+        clamp(1.55 - player.pitch * 1.5, 0.6, 3.6),
+        player.pos.z + back.z * 2.2);
+      camera.lookAt(m.position.x, 0.62, m.position.z);
     } else {
       camera.position.copy(player.pos);
       camera.rotation.order = 'YXZ';
