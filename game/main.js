@@ -470,13 +470,16 @@ function buildMap() {
 // 새하얀 인간형 젤리 몸 — 눈 없음, 몸 전체가 페인트 캔버스, 자세 변형 가능
 // cloneFrom을 주면 그 시점의 페인트 상태를 복사(가짜용)
 
-// 자세 프리셋: 팔/다리 rotZ(몸 평면 안 회전) + roll(벽면 위 전체 회전)
+// 자세 프리셋: 팔/다리 rotZ(몸 평면 안 회전) + roll(전체 회전) + squash(젤리 찌부)
 const POSES = [
   { name: '🙆 大자 뻗기', armL: 2.35, armR: -2.35, legL: 0.45, legR: -0.45, roll: 0 },
   { name: '🧍 차렷', armL: 0.12, armR: -0.12, legL: 0.07, legR: -0.07, roll: 0 },
   { name: '🙌 만세!', armL: 2.95, armR: -2.95, legL: 0.12, legR: -0.12, roll: 0 },
   { name: '🏃 달리기', armL: 2.1, armR: -0.5, legL: 0.85, legR: -0.1, roll: 0.3 },
   { name: '🤸 점핑잭', armL: 1.25, armR: -1.25, legL: 1.5, legR: -1.5, roll: 0 },
+  { name: '🐸 쪼그려앉기', armL: 0.75, armR: -0.75, legL: 1.75, legR: -1.75, roll: 0, squash: 0.6 },
+  { name: '💃 발레', armL: 2.5, armR: -1.9, legL: 0.06, legR: -1.6, roll: 0 },
+  { name: '🦸 슈퍼맨', armL: 2.95, armR: -0.25, legL: 0.15, legR: -0.35, roll: -Math.PI / 2 },
   { name: '🛌 옆으로 눕기', armL: 0.55, armR: -0.55, legL: 0.15, legR: -0.15, roll: Math.PI / 2 },
   { name: '🙃 물구나무', armL: 2.5, armR: -2.5, legL: 0.4, legR: -0.4, roll: Math.PI },
 ];
@@ -525,7 +528,7 @@ function buildJelly(sizeScale = 1, cloneFrom = null) {
   decorGroup.add(g);
   const j = {
     group: g, surface: surf, armL, armR, legL, legR,
-    baseScale: sizeScale, pose: 0, qBasis: null, customRoll: 0,
+    baseScale: sizeScale, pose: 0, qBasis: null, customRoll: 0, squash: 1,
     worldPos: new THREE.Vector3(), normal: new THREE.Vector3(0, 1, 0),
   };
   applyPose(j, 0);
@@ -536,6 +539,8 @@ function applyPose(j, idx) {
   const p = POSES[idx];
   j.pose = idx;
   j.customRoll = p.roll;
+  j.squash = p.squash || 1;
+  j.group.scale.set(j.baseScale, j.baseScale * j.squash, j.baseScale);   // 젤리 찌부
   j.armL.rotation.z = p.armL; j.armR.rotation.z = p.armR;
   j.legL.rotation.z = p.legL; j.legR.rotation.z = p.legR;
   if (j.qBasis) applyAttachOrientation(j);   // 이미 붙어있으면 roll 즉시 반영
@@ -548,7 +553,13 @@ function applyAttachOrientation(j) {
   const yAxis = new THREE.Vector3(0, 1, 0).applyQuaternion(j.group.quaternion);
   j.group.position.copy(j.worldPos)
     .addScaledVector(j.normal, 0.115 * j.baseScale)
-    .addScaledVector(yAxis, -0.55 * j.baseScale);
+    .addScaledVector(yAxis, -0.55 * j.baseScale * j.squash);
+}
+
+// 걷기 중 자세(눕기/물구나무 등)로 몸이 땅에 파묻히지 않게 들어올릴 높이
+function jellyLift(j) {
+  const th = j.customRoll || 0, s = j.baseScale;
+  return Math.max(0, -Math.cos(th)) * 1.08 * s * j.squash + Math.abs(Math.sin(th)) * 0.18 * s;
 }
 
 // 표면에 젤리맨을 붙임: 등(-Z)을 벽에 대고, 머리는 위쪽으로
@@ -1227,19 +1238,19 @@ function doBlinkStep(now) {
   } else if (game.blinking) {
     const t = 1 - (game.blinkUntil - now) / BREATH_DUR;
     if (t >= 1) {
-      h.group.scale.setScalar(h.baseScale);
+      h.group.scale.set(h.baseScale, h.baseScale * h.squash, h.baseScale);
       game.blinking = false;
       scheduleBlink();
     } else {
       const amp = DIFF[game.difficulty].breath;
       const s = 1 + Math.sin(t * Math.PI) * amp;
-      h.group.scale.set(h.baseScale * s, h.baseScale, h.baseScale * s);  // 옆으로 볼록
+      h.group.scale.set(h.baseScale * s, h.baseScale * h.squash, h.baseScale * s);  // 옆으로 볼록
     }
   }
 }
 function restoreEyeOpen() {
   const h = game.hidden;
-  if (h) h.group.scale.setScalar(h.baseScale);
+  if (h) h.group.scale.set(h.baseScale, h.baseScale * h.squash, h.baseScale);
   game.blinking = false;
 }
 
@@ -1578,8 +1589,14 @@ function animate() {
     } else if (st === 'hide' && game.cham && !game.chamPlaced) {
       // 3인칭: 내 젤리맨이 앞에서 걸어다님
       const m = game.cham.group;
-      m.position.set(player.pos.x, moving ? Math.abs(Math.sin(now * 0.012)) * 0.07 : 0, player.pos.z);
+      m.position.set(
+        player.pos.x,
+        (moving ? Math.abs(Math.sin(now * 0.012)) * 0.07 : 0) + jellyLift(game.cham),
+        player.pos.z);
       m.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), player.yaw + Math.PI);
+      if (game.cham.customRoll) {
+        m.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), game.cham.customRoll));
+      }
       const back = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw));
       camera.position.set(
         player.pos.x + back.x * 2.2,
