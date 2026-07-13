@@ -925,7 +925,7 @@ canvas.addEventListener('pointerdown', (e) => {
       p.kind = 'paint';
       const hit = raycastScreen(e.clientX, e.clientY, true);
       if (hit && hit.object.userData.surface) {
-        if (game.tool === 'drop') { eyedrop(hit); p.kind = 'look'; }
+        if (game.tool === 'drop') { eyedrop(hit); p.kind = 'drop'; }   // 색만 추출, 탭으로 처리 안 함
         else {
           if (game.cham && hit.object.userData.surface === game.cham.surface) pushUndo(game.cham.surface);
           p.last = paintAt(hit, null, e.pressure, e.pointerType === 'pen');
