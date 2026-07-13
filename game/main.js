@@ -672,18 +672,47 @@ segWire('segTime', (v) => { game.hideTime = parseInt(v, 10); });
 
 // ---------------- 페인트 팔레트 ----------------
 // 어차피 스포이드로 찍는 게 핵심이라 프리셋은 최소한만 + 전체 색상 피커
+// + 붙는 순간 주변 벽 색을 자동 추출해서 점선 스와치로 추가
 const PALETTE = ['#ffffff', '#1a202c', '#8a939e', '#e53e3e', '#f6e05e', '#3182ce'];
-{
+game.nearbyColors = [];
+function renderSwatches() {
   const wrap = $('swatches');
-  PALETTE.forEach((c) => {
+  wrap.innerHTML = '';
+  const add = (c, near) => {
     const d = document.createElement('div');
-    d.className = 'sw'; d.style.background = c;
+    d.className = near ? 'sw near' : 'sw';
+    d.style.background = c;
     d.addEventListener('click', () => {
       game.color = c; game.tool = 'brush';
       updatePaintbarUI(); sfx.click();
     });
     wrap.appendChild(d);
-  });
+  };
+  PALETTE.forEach((c) => add(c, false));
+  game.nearbyColors.forEach((c) => add(c, true));
+}
+renderSwatches();
+// 붙은 지점 주변에서 대표 색 추출
+function buildNearbyPalette(hit) {
+  const ud = hit.object.userData, s = ud.surface;
+  game.nearbyColors = [];
+  if (s) {
+    const { x, y } = uvToPx(s, hit.uv.x, hit.uv.y);
+    const cols = [];
+    [[0, 0], [0.4, 0], [-0.4, 0], [0, 0.4], [0, -0.4], [0.8, 0.3], [-0.8, -0.3], [0.5, -0.5]].forEach(([ox, oy]) => {
+      const px2 = clamp(Math.round(x + ox * ud.ppmX), 0, s.canvas.width - 1);
+      const py2 = clamp(Math.round(y + oy * ud.ppmY), 0, s.canvas.height - 1);
+      try {
+        const d = s.ctx.getImageData(px2, py2, 1, 1).data;
+        if (!cols.some((q) => Math.abs(q[0] - d[0]) + Math.abs(q[1] - d[1]) + Math.abs(q[2] - d[2]) < 60)) {
+          cols.push([d[0], d[1], d[2]]);
+        }
+      } catch (e) {}
+    });
+    game.nearbyColors = cols.slice(0, 5).map((c) => `rgb(${c[0]},${c[1]},${c[2]})`);
+    if (game.nearbyColors[0]) game.color = game.nearbyColors[0];   // 밑색 자동 세팅
+  }
+  renderSwatches();
 }
 function toHex(color) {
   const cv = toHex.cv || (toHex.cv = document.createElement('canvas').getContext('2d'));
@@ -708,6 +737,25 @@ $('colorPicker').addEventListener('input', (e) => {
 $('brushTool').addEventListener('click', () => { game.tool = 'brush'; updatePaintbarUI(); sfx.click(); });
 $('dropTool').addEventListener('click', () => { game.tool = 'drop'; updatePaintbarUI(); sfx.click(); toast('💉 표면을 탭하면 색을 추출해요', 1400); });
 $('eraseTool').addEventListener('click', () => { game.tool = 'erase'; updatePaintbarUI(); sfx.click(); });
+$('fillTool').addEventListener('click', () => {
+  if (!game.cham) return;
+  sfx.click();
+  pushUndo(game.cham.surface);
+  const s = game.cham.surface;
+  s.ctx.fillStyle = game.color;
+  s.ctx.fillRect(0, 0, s.canvas.width, s.canvas.height);
+  s.dirty = true;
+  toast('🪣 몸 전체를 채웠어요! 이제 무늬를 그리세요', 1300);
+});
+$('previewTool').addEventListener('click', () => {
+  if (!game.editCam) return;
+  sfx.click();
+  const on = game.editDist < 4;
+  game.editDist = on ? 6 : 1.4;
+  game.editPanX = 0; game.editPanY = 0;
+  $('previewTool').classList.toggle('on', on);
+  toast(on ? '👁️ 술래 눈에는 이렇게 보여요!' : '🎨 편집 거리로 복귀', 1200);
+});
 // 브러시 크기 슬라이더 (0.01m ~ 0.25m — 몸에 세밀하게 그리는 용도)
 $('brushRange').addEventListener('input', (e) => {
   const v = +e.target.value;
@@ -777,7 +825,7 @@ function setZoom(fov) {
 }
 window.addEventListener('wheel', (e) => {
   if (game.editCam && game.state === 'hide') {
-    game.editDist = clamp(game.editDist + e.deltaY * 0.003, 0.55, 3.2);
+    game.editDist = clamp(game.editDist + e.deltaY * 0.003, 0.55, 7);
   } else if ((game.state === 'hide' && game.paintMode) || game.state === 'seek') {
     setZoom(camera.fov + e.deltaY * 0.02);
   }
@@ -855,7 +903,8 @@ function placeChameleonAt(hit, isReal) {
     game.hidden = game.cham;
     $('readyBtn').disabled = false;
     $('paintModeBtn').style.opacity = 1;
-    toast('🕴️ 붙었다! 바로 몸을 색칠하세요 (🚶 걷기로 나가기)', 2400);
+    buildNearbyPalette(hit);   // 주변 벽 색 자동 추출 + 밑색 세팅
+    toast('🕴️ 붙었다! 🪣로 밑색 → 무늬 그리기 (🚶 걷기로 나가기)', 2400);
     if (game.state === 'hide') enterEditCam(true);   // 벽 정면 편집 뷰 + 그리기 ON
   } else {
     // 가짜: 지금까지 칠한 내 모습 + 현재 자세(커스텀 포함)를 그대로 복제
@@ -1005,7 +1054,7 @@ canvas.addEventListener('pointermove', (e) => {
       if (o) {
         const prevDist = Math.hypot(prevX - o.lx, prevY - o.ly);
         const newDist = Math.hypot(e.clientX - o.lx, e.clientY - o.ly);
-        if (game.editCam) game.editDist = clamp(game.editDist + (newDist - prevDist) * -0.01, 0.55, 3.2);
+        if (game.editCam) game.editDist = clamp(game.editDist + (newDist - prevDist) * -0.01, 0.55, 7);
         else setZoom(camera.fov + (prevDist - newDist) * 0.12);
       }
     }
@@ -1271,6 +1320,7 @@ $('poseBtn').addEventListener('click', () => {
 function enterEditCam(withPaint) {
   game.editCam = true;
   game.editDist = 1.4; game.editPanX = 0; game.editPanY = 0;   // 몸이 화면에 꽉 차게
+  $('previewTool').classList.remove('on');
   stickHide(); stickPtr = null;
   show('walkBtn', true);
   if (withPaint) setPaintMode(true);
@@ -1318,9 +1368,10 @@ function startHandoff(next) {
   const team = next === 'hide' ? game.hiderTeam : seekerTeam();
   $('hoEmoji').textContent = next === 'hide' ? '🎨' : '🔍';
   $('hoWho').textContent = `${teamLabel(team)} 차례`;
-  $('hoDesc').innerHTML = next === 'hide'
+  const scoreLine = `<span style="color:#94a3b8">라운드 ${game.round}/${game.rounds} · 🔴 A ${game.scoreA} : ${game.scoreB} B 🔵</span><br>`;
+  $('hoDesc').innerHTML = scoreLine + (next === 'hide'
     ? `기기를 <b>${team}팀</b>에게 전달하세요.<br>새하얀 젤리맨 몸을 색칠하고 자세를 잡아 벽에 붙으세요! (제한 ${fmtTime(game.hideTime)})<br><b style="color:#fca5a5">${seekerTeam() === 'A' ? 'A' : 'B'}팀(술래)은 화면을 보면 안 돼요! 🙈</b>`
-    : `기기를 <b>${team}팀</b>에게 전달하세요.<br>🔫 샷건으로 진짜 젤리맨을 쏘세요! (제한 ${fmtTime(SEEK_TIME)} · 탄약 ${DIFF[game.difficulty].guesses}발)<br><b style="color:#fca5a5">빗나간 총알은 영영 소모!</b> 탄약이 다 떨어지면 숨는 팀 승리<br>💡 진짜는 아주 가끔 <b>후우~ 하고 숨을 쉬어요</b> (몸이 살짝 부풀었다 꺼짐)`;
+    : `기기를 <b>${team}팀</b>에게 전달하세요.<br>🔫 샷건으로 진짜 젤리맨을 쏘세요! (제한 ${fmtTime(SEEK_TIME)} · 탄약 ${DIFF[game.difficulty].guesses}발)<br><b style="color:#fca5a5">빗나간 총알은 영영 소모!</b> 탄약이 다 떨어지면 숨는 팀 승리<br>💡 진짜는 아주 가끔 <b>후우~ 하고 숨을 쉬어요</b> (몸이 살짝 부풀었다 꺼짐)`);
   $('hoBtn').textContent = next === 'hide' ? '🎨 숨기 시작!' : '🔍 찾기 시작!';
   $('hoBtn').onclick = () => { sfx.click(); next === 'hide' ? beginHide() : beginSeek(); };
   show('handoff', true);
@@ -1350,6 +1401,8 @@ function beginHide() {
   game.state = 'hide';
   setPhaseUI();
   updatePaintbarUI();
+  game.nearbyColors = [];
+  renderSwatches();
   toast(`${teamLabel(game.hiderTeam)} — 하얀 젤리맨을 색칠해서 위장하세요!`, 2600);
   setHint('👆 벽/바닥/상자를 탭하면 그 자리에 붙어요');
   setTimeout(() => { if (game.state === 'hide' && !game.paintMode && !game.placing) setHint(''); }, 5000);
@@ -1531,6 +1584,7 @@ function animate() {
     game.timer -= dt;
     $('timer').textContent = fmtTime(game.timer);
     const sec = Math.ceil(game.timer);
+    $('timer').style.color = sec <= 10 ? '#f87171' : '#fde047';
     if (sec <= 10 && sec !== game.lastTickSec && sec > 0) { game.lastTickSec = sec; sfx.tick(); }
     if (game.timer <= 0) {
       if (st === 'hide') {
