@@ -15,7 +15,11 @@ const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 // ---------------- 기기 감지 (iPad + PC 모두 지원) ----------------
 const isTouchDevice = navigator.maxTouchPoints > 0;
 if (isTouchDevice) $('rotate').classList.add('armed');   // 세로 경고는 터치 기기에서만
-document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+document.addEventListener('touchmove', (e) => {
+  // 굵기 슬라이더 등 UI 조작은 막지 않음 (화면 스크롤만 방지)
+  if (e.target && e.target.closest && e.target.closest('#paintbar, #posePanel, .settings')) return;
+  e.preventDefault();
+}, { passive: false });
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 document.addEventListener('dblclick', (e) => e.preventDefault());
 document.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -134,8 +138,9 @@ class PaintSurface {
     solidMeshes.push(mesh);
     return mesh;
   }
-  // 아틀라스의 uv 영역을 쓰는 임의 지오메트리 파트(카멜레온 몸 등)
-  addPart(geo, u0, v0, u1, v1, sizeM, group) {
+  // 아틀라스의 uv 영역을 쓰는 임의 지오메트리 파트(젤리맨 몸 등)
+  // sizeX/sizeY: 이 파트가 uv 가로/세로로 덮는 실제 월드 길이(m) — 붓 왜곡 보정용
+  addPart(geo, u0, v0, u1, v1, sizeX, sizeY, group) {
     const uv = geo.attributes.uv;
     for (let i = 0; i < uv.count; i++) {
       uv.setXY(i, u0 + uv.getX(i) * (u1 - u0), v0 + uv.getY(i) * (v1 - v0));
@@ -143,8 +148,8 @@ class PaintSurface {
     const mesh = new THREE.Mesh(geo, this.material);
     mesh.userData = {
       surface: this,
-      ppmX: this.canvas.width * (u1 - u0) / sizeM,
-      ppmY: this.canvas.height * (v1 - v0) / sizeM,
+      ppmX: this.canvas.width * (u1 - u0) / sizeX,
+      ppmY: this.canvas.height * (v1 - v0) / sizeY,
     };
     group.add(mesh);
     paintMeshes.push(mesh);
@@ -487,30 +492,30 @@ function buildJelly(sizeScale = 1, cloneFrom = null) {
   surf.texture.needsUpdate = true;
 
   const g = new THREE.Group();
-  const part = (geo, r, sizeM) => surf.addPart(geo, r[0], r[1], r[2], r[3], sizeM, g);
+  const part = (geo, r, sx, sy) => surf.addPart(geo, r[0], r[1], r[2], r[3], sx, sy, g);
 
   // 몸통 (앞뒤로 납작한 젤리 캡슐) — 정면 = +Z
   const torsoGeo = new THREE.CapsuleGeometry(0.155, 0.26, 6, 14);
   torsoGeo.scale(1, 1, 0.66);
-  part(torsoGeo, [0, 0, 0.5, 0.55], 0.72).position.set(0, 0.62, 0);
+  part(torsoGeo, [0, 0, 0.5, 0.55], 0.82, 0.57).position.set(0, 0.62, 0);   // 둘레, 키
   // 머리 (눈 없음!)
   const headGeo = new THREE.SphereGeometry(0.115, 16, 12);
   headGeo.scale(1, 1.08, 0.8);
-  part(headGeo, [0.5, 0, 0.8, 0.3], 0.25).position.set(0, 0.98, 0);
+  part(headGeo, [0.5, 0, 0.8, 0.3], 0.65, 0.39).position.set(0, 0.98, 0);
   // 팔다리 — 위쪽 캡(관절 볼)의 '중심'이 회전축이라 어떤 자세여도 몸에 붙어 있음
-  const limb = (rM, len, rect, sizeM, px2, py2) => {
+  const limb = (rM, len, rect, sx, sy, px2, py2) => {
     const geo = new THREE.CapsuleGeometry(rM, len, 4, 10);
     geo.scale(1, 1, 0.75);
     geo.translate(0, -len / 2, 0);   // 관절 볼 중심 = 원점(회전축)
-    const m = part(geo, rect, sizeM);
+    const m = part(geo, rect, sx, sy);
     m.position.set(px2, py2, 0);
     return m;
   };
   // 어깨/골반을 몸통 표면 안쪽에 심어서 관절 볼이 항상 몸에 파묻힘
-  const armL = limb(0.055, 0.27, [0.8, 0, 0.9, 0.42], 0.38, 0.15, 0.77);
-  const armR = limb(0.055, 0.27, [0.9, 0, 1, 0.42], 0.38, -0.15, 0.77);
-  const legL = limb(0.066, 0.34, [0.5, 0.32, 0.64, 0.8], 0.47, 0.075, 0.42);
-  const legR = limb(0.066, 0.34, [0.64, 0.32, 0.78, 0.8], 0.47, -0.075, 0.42);
+  const armL = limb(0.055, 0.27, [0.8, 0, 0.9, 0.42], 0.31, 0.38, 0.15, 0.77);
+  const armR = limb(0.055, 0.27, [0.9, 0, 1, 0.42], 0.31, 0.38, -0.15, 0.77);
+  const legL = limb(0.066, 0.34, [0.5, 0.32, 0.64, 0.8], 0.37, 0.47, 0.075, 0.42);
+  const legR = limb(0.066, 0.34, [0.64, 0.32, 0.78, 0.8], 0.37, 0.47, -0.075, 0.42);
   armL.userData.limb = 'armL'; armR.userData.limb = 'armR';
   legL.userData.limb = 'legL'; legR.userData.limb = 'legR';
 
@@ -620,7 +625,7 @@ const game = {
   paintMode: false,
   editCam: false,          // 붙은 뒤 벽 정면 고정 편집 카메라
   editDist: 2.2, editPanX: 0, editPanY: 0,
-  tool: 'brush', brushM: 0.14, color: '#e53e3e',
+  tool: 'brush', brushM: 0.05, color: '#e53e3e',
   recoil: 0,
   nextBlink: 0, blinkUntil: 0, blinking: false,
   confirmOpen: false, pending: null,
@@ -701,12 +706,12 @@ $('colorPicker').addEventListener('input', (e) => {
 $('brushTool').addEventListener('click', () => { game.tool = 'brush'; updatePaintbarUI(); sfx.click(); });
 $('dropTool').addEventListener('click', () => { game.tool = 'drop'; updatePaintbarUI(); sfx.click(); toast('💉 표면을 탭하면 색을 추출해요', 1400); });
 $('eraseTool').addEventListener('click', () => { game.tool = 'erase'; updatePaintbarUI(); sfx.click(); });
-// 브러시 크기 슬라이더 (2px~60px 표시 = 0.02m~0.60m)
+// 브러시 크기 슬라이더 (0.01m ~ 0.25m — 몸에 세밀하게 그리는 용도)
 $('brushRange').addEventListener('input', (e) => {
   const v = +e.target.value;
   game.brushM = v / 100;
   const d = $('brushPreview');
-  const px = clamp(v * 0.7, 5, 42);
+  const px = clamp(v * 1.6, 5, 40);
   d.style.width = px + 'px'; d.style.height = px + 'px';
 });
 
@@ -789,28 +794,30 @@ function paintAt(hit, last, pressure = 0.5, isPen = false) {
   const s = ud.surface;
   if (!game.cham || s !== game.cham.surface) return null;   // 몸 밖은 조용히 무시
   const { x, y } = uvToPx(s, hit.uv.x, hit.uv.y);
-  const ppm = (ud.ppmX + ud.ppmY) / 2;
   // 애플펜슬 필압으로 굵기 조절 (살살 = 가늘게, 꾹 = 굵게)
   const pressF = isPen ? (0.25 + clamp(pressure, 0.05, 1) * 1.5) : 1;
-  const r = Math.max(1.2, game.brushM * ppm * pressF);
+  // 부위별 가로/세로 픽셀 밀도가 달라서 타원으로 찍어야 표면에선 정원이 됨
+  const rX = Math.max(1.2, game.brushM * ud.ppmX * pressF);
+  const rY = Math.max(1.2, game.brushM * ud.ppmY * pressF);
+  const r = (rX + rY) / 2;
 
   const ctx = s.ctx;
   const drawDot = (cx2, cy2) => {
     if (game.tool === 'erase') {
       ctx.save();
-      ctx.beginPath(); ctx.arc(cx2, cy2, r, 0, 7); ctx.clip();
+      ctx.beginPath(); ctx.ellipse(cx2, cy2, rX, rY, 0, 0, 7); ctx.clip();
       ctx.drawImage(s.base, 0, 0);
       ctx.restore();
     } else {
       ctx.fillStyle = game.color;
-      ctx.beginPath(); ctx.arc(cx2, cy2, r, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(cx2, cy2, rX, rY, 0, 0, 7); ctx.fill();
     }
   };
   if (last && last.s === s) {
     const dx = x - last.x, dy = y - last.y;
     const dist = Math.hypot(dx, dy);
     if (dist < Math.max(220, r * 8)) {
-      const steps = Math.max(1, Math.ceil(dist / (r * 0.45)));
+      const steps = Math.max(1, Math.ceil(dist / (Math.min(rX, rY) * 0.45)));
       for (let i = 1; i <= steps; i++) drawDot(last.x + dx * i / steps, last.y + dy * i / steps);
     } else drawDot(x, y);
   } else drawDot(x, y);
