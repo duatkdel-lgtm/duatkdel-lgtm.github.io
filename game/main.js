@@ -77,8 +77,10 @@ scene.fog = new THREE.Fog(0x8ecbee, 55, 120);
 
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 200);
 
-scene.add(new THREE.HemisphereLight(0xdfeeff, 0x7fa35c, 1.15));
-scene.add(new THREE.AmbientLight(0xffffff, 0.42));
+const hemiLight = new THREE.HemisphereLight(0xdfeeff, 0x7fa35c, 1.15);
+scene.add(hemiLight);
+const ambLight = new THREE.AmbientLight(0xffffff, 0.42);
+scene.add(ambLight);
 const sun = new THREE.DirectionalLight(0xfff2d6, 0.95);
 sun.position.set(25, 40, 12);
 scene.add(sun);
@@ -90,7 +92,9 @@ window.addEventListener('resize', () => {
 });
 
 // ---------------- 페인트 표면 (캔버스 아틀라스) ----------------
-const ARENA = 23;               // 맵 반경 (±23m)
+const ARENA = 23;               // 마을 맵 반경 (±23m)
+let ARENA_X = 23, ARENA_Z = 23; // 현재 맵의 이동 가능 절반 크기
+let SPAWN = { x: 0, z: 18, yaw: 0 };   // 맵별 시작 위치
 let paintSurfaces = [];         // PaintSurface 목록
 let paintMeshes = [];           // 레이캐스트 대상(칠할 수 있는 면)
 let solidMeshes = [];           // 시야 차단 포함 전체(레이캐스트 오클루전)
@@ -361,6 +365,16 @@ function cratePainter(kind) {
 
 function buildMap() {
   clearMap();
+  if (game.map === 'gym') buildGymMap();
+  else buildTownMap();
+}
+
+function buildTownMap() {
+  ARENA_X = ARENA; ARENA_Z = ARENA;
+  SPAWN = { x: 0, z: 18, yaw: 0 };
+  scene.background.set(0x8ecbee);
+  scene.fog.color.set(0x8ecbee); scene.fog.near = 55; scene.fog.far = 120;
+  hemiLight.intensity = 1.15; ambLight.intensity = 0.42; sun.intensity = 0.95;
   // ---- 바닥 ----
   const groundSize = ARENA * 2;
   const gSurf = new PaintSurface(1024, 1024);
@@ -463,6 +477,440 @@ function buildMap() {
     { x1: -ARENA - 2, z1: ARENA, x2: ARENA + 2, z2: ARENA + 2 },
     { x1: -ARENA - 2, z1: -ARENA - 2, x2: -ARENA, z2: ARENA + 2 },
     { x1: ARENA, z1: -ARENA - 2, x2: ARENA + 2, z2: ARENA + 2 },
+  );
+}
+
+// ============================================================
+//  💪 노네임피트니스 맵 — 실제 매장 도면/사진 기반
+//  블랙 노출천장 + 라인조명 + 네온스트립, 아치거울 단상,
+//  골드 포스터월, 빨간 랙, 연두 러닝머신, 브릭 기둥
+// ============================================================
+const GYM_X = 22, GYM_Z = 10, GYM_H = 4.2;   // 실내 44 x 20m, 층고 4.2m
+
+function neonStrip(ctx, x, y, w, h) {
+  const g = ctx.createLinearGradient(x, y, x + w, y);
+  g.addColorStop(0, '#ff2fb3'); g.addColorStop(0.35, '#a855f7');
+  g.addColorStop(0.7, '#6366f1'); g.addColorStop(1, '#38bdf8');
+  ctx.fillStyle = g; ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.fillRect(x, y + h * 0.3, w, h * 0.25);
+}
+function drawGymPoster(ctx, x, y, w, h) {
+  ctx.fillStyle = '#c9a227'; ctx.fillRect(x - 4, y - 4, w + 8, h + 8);   // 골드 프레임
+  const g = ctx.createLinearGradient(x, y, x, y + h);
+  g.addColorStop(0, '#4a4d52'); g.addColorStop(1, '#24262a');
+  ctx.fillStyle = g; ctx.fillRect(x, y, w, h);
+  // 흑백 피트니스 모델 실루엣
+  ctx.fillStyle = 'rgba(15,16,18,.85)';
+  ctx.beginPath();
+  ctx.ellipse(x + w / 2, y + h * 0.32, w * 0.16, h * 0.13, 0, 0, 7); ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(x + w / 2, y + h * 0.62, w * 0.26, h * 0.26, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = '#c9a227';
+  ctx.font = `bold ${Math.max(8, w * 0.13)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText('NONAME FITNESS', x + w / 2, y + h * 0.95);
+  ctx.textAlign = 'left';
+}
+// 양면 파티션 벽 (축 정렬: rot 0 = X방향, PI/2 = Z방향)
+function makeDoubleWall(cx, cz, alongZ, len, h, paintFn) {
+  const ppm = 52;
+  const s = new PaintSurface(Math.min(2048, Math.ceil(len * 2 * ppm)), Math.ceil(h * ppm));
+  paintFn(s.ctx, s.canvas.width, s.canvas.height);
+  const rot = alongZ ? Math.PI / 2 : 0;
+  const dir = new THREE.Vector3(Math.sin(rot), 0, Math.cos(rot));
+  const p1 = new THREE.Vector3(cx, h / 2, cz).addScaledVector(dir, 0.03);
+  const p2 = new THREE.Vector3(cx, h / 2, cz).addScaledVector(dir, -0.03);
+  s.addPlane(len, h, 0, 0, 0.5, 1, p1, rot);
+  s.addPlane(len, h, 0.5, 0, 1, 1, p2, rot + Math.PI);
+  s.snapshotBase(); s.texture.needsUpdate = true;
+  const ex = alongZ ? 0.15 : len / 2 + 0.1;
+  const ez = alongZ ? len / 2 + 0.1 : 0.15;
+  colliders.push({ x1: cx - ex, z1: cz - ez, x2: cx + ex, z2: cz + ez });
+  return s;
+}
+function plantPot(x, z) {
+  const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.18, 0.45, 8),
+    new THREE.MeshLambertMaterial({ color: 0xe8e6e0 }));
+  pot.position.set(x, 0.23, z);
+  const leaf = new THREE.Mesh(new THREE.IcosahedronGeometry(0.42, 0),
+    new THREE.MeshLambertMaterial({ color: 0x3f7d44 }));
+  leaf.position.set(x, 0.85, z);
+  decorGroup.add(pot, leaf);
+  solidMeshes.push(pot, leaf);
+  colliders.push({ x1: x - 0.25, z1: z - 0.25, x2: x + 0.25, z2: z + 0.25 });
+}
+
+function buildGymMap() {
+  ARENA_X = GYM_X; ARENA_Z = GYM_Z;
+  SPAWN = { x: 19.5, z: 6.5, yaw: Math.PI / 2 };   // 정문에서 홀 안쪽을 바라봄
+  scene.background.set(0x0d0e12);
+  scene.fog.color.set(0x0d0e12); scene.fog.near = 30; scene.fog.far = 85;
+  hemiLight.intensity = 0.55; ambLight.intensity = 0.8; sun.intensity = 0.6;
+
+  const W2 = GYM_X * 2, D2 = GYM_Z * 2;
+
+  // ---- 바닥: 검은 고무매트 타일 + 존별 색 ----
+  const gSurf = new PaintSurface(1408, 640);
+  {
+    const ctx = gSurf.ctx, W = 1408, H = 640;
+    const zx = (wx) => (wx + GYM_X) / W2 * W, zy = (wz) => (wz + GYM_Z) / D2 * H;
+    ctx.fillStyle = '#1b1c20'; ctx.fillRect(0, 0, W, H);
+    speckle(ctx, 0, 0, W, H, ['#17181c', '#212228', '#25262c'], 2200, 1, 4, 0.7);
+    // 고무매트 타일 줄눈
+    ctx.strokeStyle = 'rgba(0,0,0,.4)'; ctx.lineWidth = 2;
+    for (let x = 0; x < W; x += 32) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+    for (let y = 0; y < H; y += 32) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+    // 스트레칭 단상 (베이지 타일)
+    ctx.fillStyle = '#cfc9bd';
+    ctx.fillRect(zx(-21.5), zy(-9.5), zx(-13.5) - zx(-21.5), zy(-3) - zy(-9.5));
+    speckle(ctx, zx(-21.5), zy(-9.5), zx(-13.5) - zx(-21.5), zy(-3) - zy(-9.5), ['#c5bfb2', '#d8d2c6'], 160, 1, 3, 0.7);
+    // 요가매트 3장
+    ctx.fillStyle = '#3f4449';
+    [[-20.3, -8.6], [-18.2, -8.6], [-16.1, -8.6]].forEach(([mx, mz]) => {
+      ctx.fillRect(zx(mx), zy(mz), zx(mx + 0.9) - zx(mx), zy(mz + 2.2) - zy(mz));
+    });
+    // 스피닝룸 다크 존
+    ctx.fillStyle = '#121317';
+    ctx.fillRect(zx(15), zy(-10), zx(22) - zx(15), zy(-3) - zy(-10));
+    // 정문 그린 매트 + 오렌지 라인
+    ctx.fillStyle = '#2f7d3b';
+    ctx.fillRect(zx(18.5), zy(4.5), zx(22) - zx(18.5), zy(8.5) - zy(4.5));
+    ctx.strokeStyle = '#f97316'; ctx.lineWidth = 5;
+    ctx.strokeRect(zx(18.5), zy(4.5), zx(22) - zx(18.5), zy(8.5) - zy(4.5));
+    // 중앙 통로 라임 라인
+    ctx.fillStyle = 'rgba(181,227,65,.5)';
+    ctx.fillRect(zx(-13), zy(1.7), zx(14) - zx(-13), 4);
+    ctx.fillRect(zx(-13), zy(-1.7), zx(14) - zx(-13), 4);
+  }
+  gSurf.addPlane(W2, D2, 0, 0, 1, 1, new THREE.Vector3(0, 0, 0), 0, -Math.PI / 2);
+  gSurf.snapshotBase(); gSurf.texture.needsUpdate = true;
+
+  // ---- 북쪽 벽: 창문 + 화이트 브릭 기둥 + 형광 사인 ----
+  {
+    const s = new PaintSurface(2048, Math.ceil(2048 / W2 * GYM_H));
+    const ctx = s.ctx, W = s.canvas.width, H = s.canvas.height;
+    const ppmX = W / W2, ppmY = H / GYM_H;
+    ctx.fillStyle = '#101319'; ctx.fillRect(0, 0, W, H);
+    // 유리 패널 + 검은 프레임
+    for (let x = 0; x < W; x += 1.6 * ppmX) {
+      const g = ctx.createLinearGradient(x, 0, x + 1.6 * ppmX, H);
+      g.addColorStop(0, '#1a2430'); g.addColorStop(1, '#0e141c');
+      ctx.fillStyle = g;
+      ctx.fillRect(x + 3, H * 0.12, 1.6 * ppmX - 6, H * 0.78);
+    }
+    // 화이트 브릭 기둥 (5개 간격)
+    for (let i = 0; i < 5; i++) {
+      const px = (i * 9 + 4) * ppmX;
+      brickPattern(ctx, px, 0, 1.1 * ppmX, H, ppmX * 2.2, ['#d8d5cf', '#c9c6c0', '#e2dfd9'], '#b3b0aa');
+    }
+    // 유리 위 형광 연두 사인 (밖을 향한 간판의 뒷면 느낌)
+    ctx.fillStyle = '#9ae62e';
+    ctx.font = `bold ${Math.floor(H * 0.3)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.globalAlpha = 0.85;
+    ctx.fillText('노 네 임 피 트 니 스', W / 2, H * 0.5);
+    ctx.globalAlpha = 1; ctx.textAlign = 'left';
+    // 그린 LED 시계 + NONAME MAGAZINE 포스터 (기둥 위)
+    const cx2 = (2 * 9 + 4.55) * ppmX;
+    ctx.fillStyle = '#05070a'; ctx.fillRect(cx2 - 60, H * 0.2, 120, 26);
+    ctx.fillStyle = '#31f56b'; ctx.font = `bold 20px monospace`; ctx.textAlign = 'center';
+    ctx.fillText('00:59:50', cx2, H * 0.2 + 20); ctx.textAlign = 'left';
+    ctx.fillStyle = '#f2efe9'; ctx.fillRect(cx2 - 35, H * 0.34, 70, 90);
+    ctx.fillStyle = '#26282e'; ctx.font = 'bold 11px sans-serif';
+    ctx.fillText('NONAME', cx2 - 28, H * 0.34 + 16);
+    ctx.fillText('MAGAZINE', cx2 - 28, H * 0.34 + 30);
+    neonStrip(ctx, 0, 0, W, H * 0.055);
+    s.addPlane(W2, GYM_H, 0, 0, 1, 1, new THREE.Vector3(0, GYM_H / 2, -GYM_Z), 0);
+    s.snapshotBase(); s.texture.needsUpdate = true;
+  }
+
+  // ---- 남쪽 벽: 화이트 그리드 대형 거울벽 ----
+  {
+    const s = new PaintSurface(2048, Math.ceil(2048 / W2 * GYM_H));
+    const ctx = s.ctx, W = s.canvas.width, H = s.canvas.height;
+    ctx.fillStyle = '#2a2d33'; ctx.fillRect(0, 0, W, H);
+    // 거울 패널들
+    for (let x = 8; x < W - 8; x += W / 10) {
+      const g = ctx.createLinearGradient(x, 0, x + W / 10, H);
+      g.addColorStop(0, '#454c56'); g.addColorStop(0.5, '#2e333b'); g.addColorStop(1, '#3a414b');
+      ctx.fillStyle = g;
+      ctx.fillRect(x, H * 0.12, W / 10 - 10, H * 0.82);
+      // 흰 프레임
+      ctx.strokeStyle = '#e8e8e6'; ctx.lineWidth = 5;
+      ctx.strokeRect(x, H * 0.12, W / 10 - 10, H * 0.82);
+      // 반사 하이라이트 사선
+      ctx.strokeStyle = 'rgba(255,255,255,.14)'; ctx.lineWidth = 12;
+      ctx.beginPath(); ctx.moveTo(x + 14, H * 0.85); ctx.lineTo(x + W / 22, H * 0.2); ctx.stroke();
+      // 네온 반사
+      ctx.fillStyle = 'rgba(236,72,153,.2)';
+      ctx.fillRect(x, H * 0.12, W / 10 - 10, H * 0.07);
+    }
+    neonStrip(ctx, 0, 0, W, H * 0.055);
+    s.addPlane(W2, GYM_H, 0, 0, 1, 1, new THREE.Vector3(0, GYM_H / 2, GYM_Z), Math.PI);
+    s.snapshotBase(); s.texture.needsUpdate = true;
+  }
+
+  // ---- 서쪽 벽: 골드 프레임 포스터 갤러리 (프리웨이트룸 무드) ----
+  {
+    const s = new PaintSurface(1024, Math.ceil(1024 / D2 * GYM_H));
+    const ctx = s.ctx, W = s.canvas.width, H = s.canvas.height;
+    ctx.fillStyle = '#efece6'; ctx.fillRect(0, 0, W, H);
+    speckle(ctx, 0, 0, W, H, ['#e6e2da', '#f5f2ec'], 400, 1, 3, 0.5);
+    // 하단 웨인스코팅
+    ctx.fillStyle = '#dcd7cd'; ctx.fillRect(0, H * 0.72, W, H * 0.28);
+    ctx.strokeStyle = '#c9a227'; ctx.lineWidth = 3; ctx.strokeRect(10, H * 0.75, W - 20, H * 0.2);
+    // 골드 포스터 6장
+    for (let i = 0; i < 6; i++) drawGymPoster(ctx, 30 + i * (W - 60) / 6, H * 0.16, (W - 60) / 6 - 24, H * 0.46);
+    neonStrip(ctx, 0, 0, W, H * 0.05);
+    s.addPlane(D2, GYM_H, 0, 0, 1, 1, new THREE.Vector3(-GYM_X, GYM_H / 2, 0), Math.PI / 2);
+    s.snapshotBase(); s.texture.needsUpdate = true;
+  }
+
+  // ---- 동쪽 벽: 정문 + 대형 로고 ----
+  {
+    const s = new PaintSurface(1024, Math.ceil(1024 / D2 * GYM_H));
+    const ctx = s.ctx, W = s.canvas.width, H = s.canvas.height;
+    ctx.fillStyle = '#26282e'; ctx.fillRect(0, 0, W, H);
+    speckle(ctx, 0, 0, W, H, ['#212329', '#2b2d34'], 600, 1, 3, 0.6);
+    // 대형 로고
+    ctx.fillStyle = '#f5f3ee'; ctx.font = `bold ${Math.floor(H * 0.2)}px sans-serif`; ctx.textAlign = 'center';
+    ctx.fillText('NONAME FITNESS', W / 2, H * 0.4);
+    ctx.fillStyle = '#f97316'; ctx.fillRect(W * 0.25, H * 0.47, W * 0.5, 8);
+    ctx.font = `bold ${Math.floor(H * 0.09)}px sans-serif`;
+    ctx.fillStyle = '#9ae62e';
+    ctx.fillText('노네임피트니스', W / 2, H * 0.6);
+    ctx.textAlign = 'left';
+    // 정문 (유리문 2짝, 남쪽 = 캔버스에서 z+6.5 위치)
+    const doorX = (6.5 + GYM_Z) / D2;   // 동쪽 벽은 -Z→+Z가 캔버스 x- → x+ 반전 고려 없이 근사
+    const dx = W * (1 - doorX) - 60;
+    ctx.fillStyle = '#0f1318'; ctx.fillRect(dx, H * 0.35, 120, H * 0.65);
+    ctx.strokeStyle = '#b8bcc2'; ctx.lineWidth = 5; ctx.strokeRect(dx, H * 0.35, 120, H * 0.65);
+    ctx.beginPath(); ctx.moveTo(dx + 60, H * 0.35); ctx.lineTo(dx + 60, H); ctx.stroke();
+    neonStrip(ctx, 0, 0, W, H * 0.05);
+    s.addPlane(D2, GYM_H, 0, 0, 1, 1, new THREE.Vector3(GYM_X, GYM_H / 2, 0), -Math.PI / 2);
+    s.snapshotBase(); s.texture.needsUpdate = true;
+  }
+
+  // ---- 천장 (블랙 노출 + 라인조명 + 네온 테두리) ----
+  {
+    const ceil = new THREE.Mesh(new THREE.BoxGeometry(W2, 0.2, D2),
+      new THREE.MeshLambertMaterial({ color: 0x0c0d10 }));
+    ceil.position.set(0, GYM_H + 0.1, 0);
+    decorGroup.add(ceil); solidMeshes.push(ceil);
+    for (let i = -1; i <= 1; i++) {
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(36, 0.06, 0.22),
+        new THREE.MeshBasicMaterial({ color: 0xffffff }));
+      strip.position.set(0, GYM_H - 0.04, i * 5.4);
+      decorGroup.add(strip);
+    }
+    const neonColors = [0xff2fb3, 0x8b5cf6, 0x38bdf8, 0xec4899];
+    [[0, -GYM_Z + 0.15, W2 - 0.6, 0.14], [0, GYM_Z - 0.15, W2 - 0.6, 0.14]].forEach(([x, z, len], i) => {
+      const n = new THREE.Mesh(new THREE.BoxGeometry(len, 0.08, 0.14),
+        new THREE.MeshBasicMaterial({ color: neonColors[i] }));
+      n.position.set(x, GYM_H - 0.1, z);
+      decorGroup.add(n);
+    });
+    [[-GYM_X + 0.15, 0], [GYM_X - 0.15, 0]].forEach(([x, z], i) => {
+      const n = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, D2 - 0.6),
+        new THREE.MeshBasicMaterial({ color: neonColors[i + 2] }));
+      n.position.set(x, GYM_H - 0.1, z);
+      decorGroup.add(n);
+    });
+  }
+
+  // ---- 스트레칭 단상 + 아치 거울 파티션 ----
+  makePaintBox(-17.5, -6.2, 8, 6.6, 0.18, 64, {
+    top: true,
+    paint(surf) {
+      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
+      ctx.fillStyle = '#cfc9bd'; ctx.fillRect(0, 0, W, H);
+      speckle(ctx, 0, 0, W, H, ['#c5bfb2', '#dad4c8'], 300, 1, 3, 0.6);
+    },
+  });
+  makeDoubleWall(-17.5, -2.8, false, 8, 2.6, (ctx, W, H) => {
+    ctx.fillStyle = '#5b5e63'; ctx.fillRect(0, 0, W, H);   // 다크그레이 벽
+    // 아치 거울 3개 (양면 각각)
+    for (let side = 0; side < 2; side++) {
+      const x0 = side * W / 2;
+      for (let i = 0; i < 3; i++) {
+        const mx = x0 + W / 2 * (0.14 + i * 0.3), mw = W / 2 * 0.18, mh = H * 0.62, my = H * 0.18;
+        const g = ctx.createLinearGradient(mx, my, mx + mw, my + mh);
+        g.addColorStop(0, '#3b444f'); g.addColorStop(1, '#232a33');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.moveTo(mx, my + mh);
+        ctx.lineTo(mx, my + mw / 2);
+        ctx.arc(mx + mw / 2, my + mw / 2, mw / 2, Math.PI, 0);
+        ctx.lineTo(mx + mw, my + mh);
+        ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = '#f0efec'; ctx.lineWidth = 4; ctx.stroke();
+      }
+    }
+  });
+
+  // ---- 탈의실 2개 (남쪽 벽 앞) ----
+  [['남자', -4.5, 0x60a5fa], ['여자', 1, 0xf472b6]].forEach(([label, bx, tint]) => {
+    makePaintBox(bx, 8.2, 4.4, 3.2, 3, 50, {
+      top: false,
+      paint(surf, info) {
+        const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
+        ctx.fillStyle = '#e9e4da'; ctx.fillRect(0, 0, W, H);
+        speckle(ctx, 0, 0, W, H, ['#e0dbd0', '#f1ece2'], 500, 1, 3, 0.5);
+        // 정면(첫 면)에 문 + 픽토그램 + 사인
+        const fw = info.faces[0][1] * W - info.faces[0][0] * W;
+        const ppmX = W / info.perim, ppmY = info.wallH / info.h;
+        drawDoor(ctx, fw / 2 - 0.55 * ppmX, H - 2.1 * ppmY, 1.1 * ppmX, 2.1 * ppmY, '#3f434a');
+        ctx.fillStyle = '#' + tint.toString(16).padStart(6, '0');
+        ctx.beginPath(); ctx.arc(fw / 2, H - 2.5 * ppmY, 0.25 * ppmX, 0, 7); ctx.fill();
+        ctx.fillStyle = '#3a3d42'; ctx.font = `bold ${Math.floor(0.32 * ppmY)}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText(`${label} 탈의실`, fw / 2, H - 2.95 * ppmY);
+        ctx.textAlign = 'left';
+      },
+    });
+  });
+
+  // ---- 스피닝룸 파티션 (다크) ----
+  const spinWallPaint = (ctx, W, H) => {
+    ctx.fillStyle = '#17181d'; ctx.fillRect(0, 0, W, H);
+    speckle(ctx, 0, 0, W, H, ['#131418', '#1c1d23'], 400, 1, 3, 0.6);
+    neonStrip(ctx, 0, 0, W, H * 0.06);
+    ctx.fillStyle = '#a855f7'; ctx.font = `bold ${Math.floor(H * 0.16)}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.fillText('SPINNING', W / 4, H * 0.4);
+    ctx.fillText('SPINNING', W * 3 / 4, H * 0.4); ctx.textAlign = 'left';
+  };
+  makeDoubleWall(15, -6.8, true, 6.4, 3, spinWallPaint);
+  makeDoubleWall(19.8, -3.5, false, 4.4, 3, spinWallPaint);   // 입구 틈 x 15..17.6
+
+  // ---- 기구들 ----
+  // 빨간 파워랙 2 (프리웨이트존)
+  const rackPaint = {
+    top: false,
+    paint(surf) {
+      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
+      ctx.fillStyle = '#141518'; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#c22a2a';
+      for (let x = 6; x < W; x += W / 8) ctx.fillRect(x, 0, 10, H);
+      ctx.fillStyle = 'rgba(255,255,255,.15)';
+      for (let y = 10; y < H; y += 26) ctx.fillRect(0, y, W, 3);
+    },
+  };
+  makePaintBox(-19, 4.5, 1.5, 1.5, 2.4, 60, rackPaint);
+  makePaintBox(-15.5, 4.5, 1.5, 1.5, 2.4, 60, rackPaint);
+  // 화이트 케이블 머신 2
+  const cablePaint = {
+    top: false,
+    paint(surf) {
+      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
+      ctx.fillStyle = '#e8e8e6'; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#2b2d33';
+      ctx.fillRect(W * 0.1, H * 0.15, W * 0.12, H * 0.8);
+      ctx.fillRect(W * 0.55, H * 0.15, W * 0.12, H * 0.8);
+      ctx.fillStyle = '#9aa0a8';
+      for (let y = H * 0.2; y < H; y += 14) { ctx.fillRect(W * 0.12, y, W * 0.08, 5); ctx.fillRect(W * 0.57, y, W * 0.08, 5); }
+    },
+  };
+  makePaintBox(-10, -7.5, 1.3, 0.8, 2.3, 60, cablePaint);
+  makePaintBox(-6.5, -7.5, 1.3, 0.8, 2.3, 60, cablePaint);
+  // 덤벨랙 2 (옐로 라벨)
+  const dbPaint = {
+    top: true,
+    paint(surf) {
+      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
+      ctx.fillStyle = '#1a1b1f'; ctx.fillRect(0, 0, W, H);
+      for (let y = H * 0.2; y < H * 0.95; y += H * 0.3) {
+        for (let x = 12; x < W - 12; x += 34) {
+          ctx.fillStyle = '#2c2e34'; ctx.beginPath(); ctx.arc(x, y, 9, 0, 7); ctx.fill();
+          ctx.fillStyle = '#f2c320'; ctx.beginPath(); ctx.moveTo(x - 6, y + 5); ctx.lineTo(x + 6, y + 5); ctx.lineTo(x, y - 5); ctx.closePath(); ctx.fill();
+        }
+      }
+    },
+  };
+  makePaintBox(-11.5, 7.8, 3, 0.8, 1, 64, dbPaint);
+  makePaintBox(-7.5, 7.8, 3, 0.8, 1, 64, dbPaint);
+  // 블랙 머신 6 (중앙 2열)
+  const machinePaint = {
+    top: false,
+    paint(surf) {
+      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
+      ctx.fillStyle = '#1d1f24'; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#0f1013';
+      ctx.fillRect(W * 0.08, H * 0.1, W * 0.1, H * 0.85);
+      ctx.fillRect(W * 0.5, H * 0.3, W * 0.35, H * 0.2);
+      ctx.fillStyle = '#e8e8e6'; ctx.fillRect(W * 0.3, H * 0.15, W * 0.06, H * 0.7);
+      ctx.fillStyle = '#c22a2a'; ctx.fillRect(W * 0.52, H * 0.55, W * 0.2, H * 0.12);
+    },
+  };
+  [[-3, -5], [0.5, -5], [4, -5], [-3, 5], [0.5, 5], [4, 5]].forEach(([mx, mz]) =>
+    makePaintBox(mx, mz, 1.1, 1.5, 1.6, 60, machinePaint));
+  // 러닝머신 6 (2열, 연두 포인트)
+  const tmPaint = {
+    top: true,
+    paint(surf) {
+      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
+      ctx.fillStyle = '#131418'; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#b5e341';
+      ctx.fillRect(0, H * 0.1, W, 6); ctx.fillRect(0, H * 0.8, W, 6);
+      ctx.fillStyle = '#0a0b0d'; ctx.fillRect(W * 0.3, H * 0.3, W * 0.4, H * 0.35);
+      ctx.fillStyle = '#38bdf8'; ctx.fillRect(W * 0.42, H * 0.38, W * 0.16, H * 0.18);
+    },
+  };
+  [[8.5, -6.5], [10.5, -6.5], [12.5, -6.5], [8.5, -3.5], [10.5, -3.5], [12.5, -3.5]].forEach(([mx, mz]) =>
+    makePaintBox(mx, mz, 0.9, 1.9, 1.35, 62, tmPaint));
+  // 스핀바이크 5 (스피닝룸 안)
+  const bikePaint = {
+    top: false,
+    paint(surf) {
+      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
+      ctx.fillStyle = '#151318'; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#7c3aed'; ctx.fillRect(0, H * 0.3, W, 8);
+    },
+  };
+  [[17, -8.5], [19, -8.5], [21, -8.5], [18, -5.8], [20, -5.8]].forEach(([mx, mz]) =>
+    makePaintBox(mx, mz, 0.5, 1.15, 1.1, 70, bikePaint));
+  // 인포메이션 카운터 (우드)
+  makePaintBox(16.5, 1.5, 2.6, 1, 1.1, 60, {
+    top: true,
+    paint(surf) {
+      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
+      plankPattern(ctx, 0, 0, W, H, 110, ['#b08a5c', '#a37e51', '#bc9668']);
+      ctx.fillStyle = '#f5f3ee'; ctx.font = `bold ${Math.floor(H * 0.2)}px sans-serif`;
+      ctx.fillText('INFORMATION', W * 0.05, H * 0.55);
+    },
+  });
+  // 우드 큐비 선반 (요가용품)
+  makePaintBox(-13, -0.5, 2, 0.5, 1.8, 60, {
+    top: false,
+    paint(surf) {
+      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
+      ctx.fillStyle = '#c9a877'; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#2f2a24';
+      for (let gx = 0; gx < 4; gx++) for (let gy = 0; gy < 3; gy++) {
+        ctx.fillRect(W * (0.06 + gx * 0.24), H * (0.08 + gy * 0.32), W * 0.18, H * 0.24);
+      }
+      // 핑크 짐볼 하나
+      ctx.fillStyle = '#f472b6';
+      ctx.beginPath(); ctx.arc(W * 0.39, H * 0.52, H * 0.11, 0, 7); ctx.fill();
+    },
+  });
+  // 키오스크
+  makePaintBox(20.5, 4.9, 0.6, 0.5, 1.6, 70, {
+    top: false,
+    paint(surf) {
+      const ctx = surf.ctx, W = surf.canvas.width, H = surf.canvas.height;
+      ctx.fillStyle = '#26282e'; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#f97316'; ctx.fillRect(W * 0.1, H * 0.1, W * 0.3, H * 0.35);
+    },
+  });
+  // 화분들
+  plantPot(-13.5, -8.8); plantPot(14, 8.5); plantPot(21, -1.5);
+
+  // 경기장 경계 충돌
+  colliders.push(
+    { x1: -GYM_X - 2, z1: -GYM_Z - 2, x2: GYM_X + 2, z2: -GYM_Z },
+    { x1: -GYM_X - 2, z1: GYM_Z, x2: GYM_X + 2, z2: GYM_Z + 2 },
+    { x1: -GYM_X - 2, z1: -GYM_Z - 2, x2: -GYM_X, z2: GYM_Z + 2 },
+    { x1: GYM_X, z1: -GYM_Z - 2, x2: GYM_X + 2, z2: GYM_Z + 2 },
   );
 }
 
@@ -612,8 +1060,8 @@ function collide() {
       }
     }
   }
-  p.x = clamp(p.x, -ARENA + r, ARENA - r);
-  p.z = clamp(p.z, -ARENA + r, ARENA - r);
+  p.x = clamp(p.x, -ARENA_X + r, ARENA_X - r);
+  p.z = clamp(p.z, -ARENA_Z + r, ARENA_Z - r);
 }
 
 // ---------------- 게임 상태 ----------------
@@ -626,6 +1074,7 @@ const SEEK_TIME = 180;
 const game = {
   state: 'menu',           // menu | handoff | hide | seek | reveal | result | gameover
   rounds: 4, round: 1, difficulty: 'normal',
+  map: 'town',             // 'town' | 'gym'(노네임피트니스)
   hideTime: 60,            // 숨는 시간(초) — 메뉴에서 30/60/90초 방 선택
   scoreA: 0, scoreB: 0,
   hiderTeam: 'B',          // 이번 라운드에 숨는 팀
@@ -681,6 +1130,10 @@ function segWire(id, cb) {
 segWire('segRounds', (v) => { game.rounds = parseInt(v, 10); });
 segWire('segDiff', (v) => { game.difficulty = v; });
 segWire('segTime', (v) => { game.hideTime = parseInt(v, 10); });
+segWire('segMap', (v) => {
+  game.map = v;
+  if (game.state === 'menu') buildMap();   // 메뉴 배경 미리보기 교체
+});
 
 // ---------------- 페인트 팔레트 ----------------
 // 어차피 스포이드로 찍는 게 핵심이라 프리셋은 최소한만 + 전체 색상 피커
@@ -1416,7 +1869,7 @@ function beginHide() {
   $('decoyBtn').disabled = false;
   $('readyBtn').disabled = true;
   $('paintModeBtn').style.opacity = 0.4;   // 붙기 전엔 그리기 불가 표시
-  player.reset(0, 18, 0);
+  player.reset(SPAWN.x, SPAWN.z, SPAWN.yaw);
   game.timer = game.hideTime;
   game.state = 'hide';
   setPhaseUI();
@@ -1451,7 +1904,7 @@ function beginSeek() {
   game.paintMode = false; game.placing = null;
   game.recoil = 0;
   setZoom(70);
-  player.reset(0, 18, 0);
+  player.reset(SPAWN.x, SPAWN.z, SPAWN.yaw);
   game.timer = SEEK_TIME;
   game.state = 'seek';
   setPhaseUI();
@@ -1551,8 +2004,13 @@ function animate() {
   if (st === 'menu' || st === 'handoff' || st === 'result' || st === 'gameover') {
     // 회전 데모 카메라
     menuAngle += dt * 0.1;
-    camera.position.set(Math.sin(menuAngle) * 22, 12, Math.cos(menuAngle) * 22);
-    camera.lookAt(0, 1, 0);
+    if (game.map === 'gym') {
+      camera.position.set(Math.sin(menuAngle) * 15, 2.4, Math.cos(menuAngle) * 5.5);
+      camera.lookAt(0, 1.4, 0);
+    } else {
+      camera.position.set(Math.sin(menuAngle) * 22, 12, Math.cos(menuAngle) * 22);
+      camera.lookAt(0, 1, 0);
+    }
   } else if (st === 'hide' || st === 'seek') {
     // 이동 (터치 조이스틱 + 키보드)
     let mvx = 0, mvy = 0;
