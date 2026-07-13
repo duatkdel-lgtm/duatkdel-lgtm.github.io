@@ -604,10 +604,11 @@ const DIFF = {
   normal: { sizeScale: 1.0, breath: 0.032, blinkMin: 5, blinkMax: 8.5, guesses: 9 },
   hard: { sizeScale: 0.82, breath: 0.02, blinkMin: 7, blinkMax: 11, guesses: 7 },
 };
-const HIDE_TIME = 150, SEEK_TIME = 180;
+const SEEK_TIME = 180;
 const game = {
   state: 'menu',           // menu | handoff | hide | seek | reveal | result | gameover
   rounds: 4, round: 1, difficulty: 'normal',
+  hideTime: 60,            // 숨는 시간(초) — 메뉴에서 30/60/90초 방 선택
   scoreA: 0, scoreB: 0,
   hiderTeam: 'B',          // 이번 라운드에 숨는 팀
   timer: 0, guesses: 0,
@@ -658,6 +659,7 @@ function segWire(id, cb) {
 }
 segWire('segRounds', (v) => { game.rounds = parseInt(v, 10); });
 segWire('segDiff', (v) => { game.difficulty = v; });
+segWire('segTime', (v) => { game.hideTime = parseInt(v, 10); });
 
 // ---------------- 페인트 팔레트 ----------------
 // 어차피 스포이드로 찍는 게 핵심이라 프리셋은 최소한만 + 전체 색상 피커
@@ -1231,7 +1233,7 @@ function startHandoff(next) {
   $('hoEmoji').textContent = next === 'hide' ? '🎨' : '🔍';
   $('hoWho').textContent = `${teamLabel(team)} 차례`;
   $('hoDesc').innerHTML = next === 'hide'
-    ? `기기를 <b>${team}팀</b>에게 전달하세요.<br>새하얀 젤리맨 몸을 색칠하고 자세를 잡아 벽에 붙으세요! (제한 ${fmtTime(HIDE_TIME)})<br><b style="color:#fca5a5">${seekerTeam() === 'A' ? 'A' : 'B'}팀(술래)은 화면을 보면 안 돼요! 🙈</b>`
+    ? `기기를 <b>${team}팀</b>에게 전달하세요.<br>새하얀 젤리맨 몸을 색칠하고 자세를 잡아 벽에 붙으세요! (제한 ${fmtTime(game.hideTime)})<br><b style="color:#fca5a5">${seekerTeam() === 'A' ? 'A' : 'B'}팀(술래)은 화면을 보면 안 돼요! 🙈</b>`
     : `기기를 <b>${team}팀</b>에게 전달하세요.<br>🔫 샷건으로 진짜 젤리맨을 쏘세요! (제한 ${fmtTime(SEEK_TIME)} · 탄약 ${DIFF[game.difficulty].guesses}발)<br><b style="color:#fca5a5">빗나간 총알은 영영 소모!</b> 탄약이 다 떨어지면 숨는 팀 승리<br>💡 진짜는 아주 가끔 <b>후우~ 하고 숨을 쉬어요</b> (몸이 살짝 부풀었다 꺼짐)`;
   $('hoBtn').textContent = next === 'hide' ? '🎨 숨기 시작!' : '🔍 찾기 시작!';
   $('hoBtn').onclick = () => { sfx.click(); next === 'hide' ? beginHide() : beginSeek(); };
@@ -1254,7 +1256,7 @@ function beginHide() {
   $('decoyBtn').disabled = false;
   $('readyBtn').disabled = true;
   player.reset(0, 18, 0);
-  game.timer = HIDE_TIME;
+  game.timer = game.hideTime;
   game.state = 'hide';
   setPhaseUI();
   updatePaintbarUI();
