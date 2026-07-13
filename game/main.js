@@ -1902,6 +1902,12 @@ function standBasis(j) {
   const x = new THREE.Vector3().crossVectors(y, z).normalize();
   return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
 }
+// 높은 지붕 방지: 위를 향한 면은 2.6m까지만 (지상 술래가 볼 수도 쏠 수도 없는 곳 차단)
+// 벽면(수직)은 높아도 술래 눈에 보이고 맞힐 수 있으므로 허용
+const MAX_TOP_ATTACH_Y = 2.6;
+function attachAllowed(point, n) {
+  return !(n.y > 0.5 && point.y > MAX_TOP_ATTACH_Y);
+}
 // 표면에 젤리맨을 붙임 (stand 플래그에 따라 서기/눕기)
 function attachJelly(j, hit) {
   const n = worldNormalOf(hit);
@@ -2515,6 +2521,10 @@ function pointerEnd(e) {
         if (isDecoy) toast('너무 멀어요! 좀 더 가까이 가세요', 1300);
         return;
       }
+      if (!attachAllowed(hit.point, worldNormalOf(hit))) {
+        toast('🚫 너무 높은 지붕이에요! 술래가 쏠 수 없는 곳', 1400);
+        return;
+      }
       openConfirm(isDecoy ? '🃏 가짜를 놓을까요?' : '🕴️ 여기에 붙을까요?', e.clientX, e.clientY, () => {
         placeChameleonAt(hit, !isDecoy);
         setPlacing(null);
@@ -2796,6 +2806,7 @@ function nudgeJelly(dx, dy) {
     .find((h) => h.face && !h.object.userData.jelly && !h.object.userData.noAttach);
   if (!hit) return false;   // 표면 가장자리 밖
   const n = worldNormalOf(hit);
+  if (!attachAllowed(hit.point, n)) return false;   // 높은 지붕으로 밀려 올라가는 것 방지
   j.worldPos.copy(hit.point);
   if (n.dot(j.normal) < 0.985) {
     if (j.stand && n.y >= 0.6) {
@@ -3484,7 +3495,7 @@ camera.position.set(0, 10, 26);
 camera.lookAt(0, 1, 0);
 let menuAngle = 0;
 
-window.__dbg = { game, player, pointers, raycastScreen, camera };   // 디버그/테스트용
+window.__dbg = { game, player, pointers, raycastScreen, camera, attachAllowed, worldNormalOf };   // 디버그/테스트용
 const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
