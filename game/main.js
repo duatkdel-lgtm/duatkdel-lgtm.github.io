@@ -147,7 +147,8 @@ class PaintSurface {
     }
     const mesh = new THREE.Mesh(geo, this.material);
     mesh.userData = {
-      surface: this,
+      surface: this, spherical: true,
+      u0, v0, u1, v1,
       ppmX: this.canvas.width * (u1 - u0) / sizeX,
       ppmY: this.canvas.height * (v1 - v0) / sizeY,
     };
@@ -494,28 +495,29 @@ function buildJelly(sizeScale = 1, cloneFrom = null) {
   const g = new THREE.Group();
   const part = (geo, r, sx, sy) => surf.addPart(geo, r[0], r[1], r[2], r[3], sx, sy, g);
 
-  // 몸통 (앞뒤로 납작한 젤리 캡슐) — 정면 = +Z
-  const torsoGeo = new THREE.CapsuleGeometry(0.155, 0.26, 6, 14);
-  torsoGeo.scale(1, 1, 0.66);
-  part(torsoGeo, [0, 0, 0.5, 0.55], 0.82, 0.57).position.set(0, 0.62, 0);   // 둘레, 키
+  // 몸 전체를 '늘린 구체'로 구성 — 구체 UV는 세로 밀도가 균일해서 붓이 안 늘어남
+  // 몸통 (앞뒤로 납작한 젤리 타원체) — 정면 = +Z
+  const torsoGeo = new THREE.SphereGeometry(1, 20, 16);
+  torsoGeo.scale(0.155, 0.305, 0.102);
+  part(torsoGeo, [0, 0, 0.5, 0.55], 0.82, 0.74).position.set(0, 0.62, 0);   // 둘레, 세로 호길이
   // 머리 (눈 없음!)
   const headGeo = new THREE.SphereGeometry(0.115, 16, 12);
   headGeo.scale(1, 1.08, 0.8);
-  part(headGeo, [0.5, 0, 0.8, 0.3], 0.65, 0.39).position.set(0, 0.98, 0);
-  // 팔다리 — 위쪽 캡(관절 볼)의 '중심'이 회전축이라 어떤 자세여도 몸에 붙어 있음
-  const limb = (rM, len, rect, sx, sy, px2, py2) => {
-    const geo = new THREE.CapsuleGeometry(rM, len, 4, 10);
-    geo.scale(1, 1, 0.75);
-    geo.translate(0, -len / 2, 0);   // 관절 볼 중심 = 원점(회전축)
+  part(headGeo, [0.5, 0, 0.8, 0.3], 0.65, 0.36).position.set(0, 0.98, 0);
+  // 팔다리 — 긴 타원체, 위쪽 관절 볼 중심이 회전축
+  const limb = (rM, halfLen, rect, sx, sy, px2, py2) => {
+    const geo = new THREE.SphereGeometry(1, 14, 12);
+    geo.scale(rM, halfLen, rM * 0.75);
+    geo.translate(0, -(halfLen - rM), 0);   // 관절 볼 중심 = 원점(회전축)
     const m = part(geo, rect, sx, sy);
     m.position.set(px2, py2, 0);
     return m;
   };
   // 어깨/골반을 몸통 표면 안쪽에 심어서 관절 볼이 항상 몸에 파묻힘
-  const armL = limb(0.055, 0.27, [0.8, 0, 0.9, 0.42], 0.31, 0.38, 0.15, 0.77);
-  const armR = limb(0.055, 0.27, [0.9, 0, 1, 0.42], 0.31, 0.38, -0.15, 0.77);
-  const legL = limb(0.066, 0.34, [0.5, 0.32, 0.64, 0.8], 0.37, 0.47, 0.075, 0.42);
-  const legR = limb(0.066, 0.34, [0.64, 0.32, 0.78, 0.8], 0.37, 0.47, -0.075, 0.42);
+  const armL = limb(0.055, 0.19, [0.8, 0, 0.9, 0.42], 0.31, 0.44, 0.15, 0.77);
+  const armR = limb(0.055, 0.19, [0.9, 0, 1, 0.42], 0.31, 0.44, -0.15, 0.77);
+  const legL = limb(0.066, 0.235, [0.5, 0.32, 0.64, 0.8], 0.37, 0.54, 0.075, 0.42);
+  const legR = limb(0.066, 0.235, [0.64, 0.32, 0.78, 0.8], 0.37, 0.54, -0.075, 0.42);
   armL.userData.limb = 'armL'; armR.userData.limb = 'armR';
   legL.userData.limb = 'legL'; legR.userData.limb = 'legR';
 
@@ -797,7 +799,13 @@ function paintAt(hit, last, pressure = 0.5, isPen = false) {
   // 애플펜슬 필압으로 굵기 조절 (살살 = 가늘게, 꾹 = 굵게)
   const pressF = isPen ? (0.25 + clamp(pressure, 0.05, 1) * 1.5) : 1;
   // 부위별 가로/세로 픽셀 밀도가 달라서 타원으로 찍어야 표면에선 정원이 됨
-  const rX = Math.max(1.2, game.brushM * ud.ppmX * pressF);
+  // 구체 파트는 위도에 따라 가로 둘레가 줄어들어 추가 보정 (극지방 왜곡 방지)
+  let latF = 1;
+  if (ud.spherical) {
+    const t = (hit.uv.y - ud.v0) / (ud.v1 - ud.v0);
+    latF = 1 / Math.max(0.35, Math.sin(Math.PI * clamp(t, 0, 1)));
+  }
+  const rX = Math.max(1.2, game.brushM * ud.ppmX * pressF * latF);
   const rY = Math.max(1.2, game.brushM * ud.ppmY * pressF);
   const r = (rX + rY) / 2;
 
